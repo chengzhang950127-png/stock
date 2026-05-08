@@ -8,18 +8,24 @@ Hand-written initial migration covering every ORM model declared in
 ``src/db/models.py`` at Phase 0. Subsequent migrations should be generated
 with ``alembic revision --autogenerate``.
 
-Postgres vs SQLite enum handling
---------------------------------
-Postgres needs ``CREATE TYPE foo AS ENUM (...)`` before any table can
-reference the type. SQLite has no native enum — ``sa.Enum`` falls back to
-``VARCHAR + CHECK`` there. So the upgrade does dialect-aware creation:
+Postgres enum handling
+----------------------
+This is the only non-trivial part. On Postgres, every ``sa.Enum`` column
+needs a backing ``CREATE TYPE`` statement. Two pitfalls we explicitly avoid:
 
-1. On Postgres, emit ``CREATE TYPE`` once per enum at the top of upgrade().
-2. Column-level ``sa.Enum(..., create_type=False)`` references the type
-   without re-emitting ``CREATE TYPE`` (which would fail with
-   ``DuplicateObject`` on Postgres).
-3. On SQLite, the explicit creation is skipped; ``create_type=False`` is
-   harmless because there is no native type to create.
+1. ``sa.Enum`` (the generic type) silently ignores ``create_type=False`` —
+   that kwarg only exists on ``postgresql.ENUM``. Passing it on
+   ``sa.Enum`` does nothing and the column-create event still fires
+   ``CREATE TYPE``.
+2. The ``_on_table_create`` event hook calls ``self.create(checkfirst=False)``
+   regardless of whether the type already exists, so calling
+   ``enum.create(bind, checkfirst=True)`` upfront and then letting the
+   event fire again will hit ``DuplicateObject``.
+
+Solution: branch on dialect. On Postgres, use ``postgresql.ENUM`` with
+``create_type=False`` and create the types explicitly with raw SQL. On
+SQLite (and other DBs without native enums), use ``sa.Enum`` which falls
+back to ``VARCHAR + CHECK``.
 """
 
 from __future__ import annotations
@@ -28,6 +34,8 @@ from typing import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import ENUM as PgENUM
+from sqlalchemy.types import TypeEngine
 
 revision: str = "0001"
 down_revision: str | None = None
@@ -35,9 +43,8 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-# Single source of truth for enum values. Used both for explicit CREATE TYPE
-# on Postgres and for column references via _enum() below.
-ENUMS: list[tuple[str, tuple[str, ...]]] = [
+# Single source of truth for enum (name, values) pairs.
+ENUM_DEFS: list[tuple[str, tuple[str, ...]]] = [
     ("market", ("US", "HK")),
     ("strategytype", ("BUILT_IN", "CUSTOM")),
     ("strategystatus", ("ACTIVE", "ARCHIVED", "DELETED")),
@@ -54,26 +61,44 @@ ENUMS: list[tuple[str, tuple[str, ...]]] = [
         ),
     ),
 ]
-_ENUM_VALUES: dict[str, tuple[str, ...]] = dict(ENUMS)
 
 
-def _enum(name: str) -> sa.Enum:
-    """Reference an enum by name without (re)creating it."""
-    return sa.Enum(*_ENUM_VALUES[name], name=name, create_type=False)
+def _build_enum_types(is_postgres: bool) -> dict[str, TypeEngine]:
+    """Return name -> column-ready Enum type, dialect-appropriate."""
+    if is_postgres:
+        # create_type=False so column-create events do not re-emit CREATE TYPE.
+        return {
+            name: PgENUM(*values, name=name, create_type=False)
+            for name, values in ENUM_DEFS
+        }
+    # SQLite (and other non-native-enum dialects): generic sa.Enum becomes
+    # VARCHAR + CHECK constraint.
+    return {name: sa.Enum(*values, name=name) for name, values in ENUM_DEFS}
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        # Pre-create types so subsequent op.create_table() calls can reference
-        # them without re-emitting CREATE TYPE.
-        for name, values in ENUMS:
-            sa.Enum(*values, name=name).create(bind, checkfirst=True)
+    is_pg = bind.dialect.name == "postgresql"
+
+    # 1. Pre-create Postgres enum types via raw SQL (no-op on other dialects).
+    if is_pg:
+        for name, values in ENUM_DEFS:
+            value_list = ", ".join(f"'{v}'" for v in values)
+            op.execute(f"CREATE TYPE {name} AS ENUM ({value_list})")
+
+    # 2. Build column-ready enum types and reference them in CREATE TABLEs.
+    enums = _build_enum_types(is_pg)
+    market = enums["market"]
+    strategy_type = enums["strategytype"]
+    strategy_status = enums["strategystatus"]
+    account_type = enums["accounttype"]
+    signal_direction = enums["signaldirection"]
+    regime_label = enums["regimelabel"]
 
     op.create_table(
         "stocks",
         sa.Column("code", sa.String(32), primary_key=True),
-        sa.Column("market", _enum("market"), primary_key=True),
+        sa.Column("market", market, primary_key=True),
         sa.Column("name", sa.String(256), nullable=False),
         sa.Column("industry", sa.String(128)),
         sa.Column("market_cap", sa.Numeric(20, 6)),
@@ -84,7 +109,7 @@ def upgrade() -> None:
         "price_bars",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("code", sa.String(32), nullable=False, index=True),
-        sa.Column("market", _enum("market"), nullable=False),
+        sa.Column("market", market, nullable=False),
         sa.Column("date", sa.Date(), nullable=False, index=True),
         sa.Column("open", sa.Numeric(20, 6), nullable=False),
         sa.Column("high", sa.Numeric(20, 6), nullable=False),
@@ -99,8 +124,8 @@ def upgrade() -> None:
         "strategies",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("name", sa.String(128), nullable=False, unique=True),
-        sa.Column("type", _enum("strategytype"), nullable=False),
-        sa.Column("status", _enum("strategystatus"), nullable=False),
+        sa.Column("type", strategy_type, nullable=False),
+        sa.Column("status", strategy_status, nullable=False),
         sa.Column("parameters", sa.JSON(), nullable=False),
         sa.Column("description", sa.Text()),
         sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -111,7 +136,7 @@ def upgrade() -> None:
     op.create_table(
         "accounts",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("type", _enum("accounttype"), nullable=False),
+        sa.Column("type", account_type, nullable=False),
         sa.Column(
             "strategy_id",
             sa.String(36),
@@ -135,7 +160,7 @@ def upgrade() -> None:
             index=True,
         ),
         sa.Column("stock_code", sa.String(32), nullable=False),
-        sa.Column("market", _enum("market"), nullable=False),
+        sa.Column("market", market, nullable=False),
         sa.Column("quantity", sa.Numeric(20, 6), nullable=False),
         sa.Column("avg_cost", sa.Numeric(20, 6), nullable=False),
         sa.Column("opened_at", sa.DateTime(), nullable=False),
@@ -155,8 +180,8 @@ def upgrade() -> None:
             index=True,
         ),
         sa.Column("stock_code", sa.String(32), nullable=False, index=True),
-        sa.Column("market", _enum("market"), nullable=False),
-        sa.Column("direction", _enum("signaldirection"), nullable=False),
+        sa.Column("market", market, nullable=False),
+        sa.Column("direction", signal_direction, nullable=False),
         sa.Column("quantity", sa.Numeric(20, 6), nullable=False),
         sa.Column("price", sa.Numeric(20, 6), nullable=False),
         sa.Column("fee", sa.Numeric(20, 6), nullable=False),
@@ -175,8 +200,8 @@ def upgrade() -> None:
             index=True,
         ),
         sa.Column("stock_code", sa.String(32), nullable=False, index=True),
-        sa.Column("market", _enum("market"), nullable=False),
-        sa.Column("direction", _enum("signaldirection"), nullable=False),
+        sa.Column("market", market, nullable=False),
+        sa.Column("direction", signal_direction, nullable=False),
         sa.Column("buy_low", sa.Numeric(20, 6)),
         sa.Column("buy_high", sa.Numeric(20, 6)),
         sa.Column("stop_loss", sa.Numeric(20, 6)),
@@ -212,7 +237,7 @@ def upgrade() -> None:
         "assistant_advice",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("date", sa.Date(), nullable=False, unique=True, index=True),
-        sa.Column("regime_label", _enum("regimelabel"), nullable=False),
+        sa.Column("regime_label", regime_label, nullable=False),
         sa.Column("regime_payload", sa.JSON(), nullable=False),
         sa.Column("allocation_payload", sa.JSON(), nullable=False),
         sa.Column("narrative", sa.Text()),
@@ -247,5 +272,5 @@ def downgrade() -> None:
 
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
-        for name, values in reversed(ENUMS):
-            sa.Enum(*values, name=name).drop(bind, checkfirst=True)
+        for name, _ in reversed(ENUM_DEFS):
+            op.execute(f"DROP TYPE IF EXISTS {name}")
