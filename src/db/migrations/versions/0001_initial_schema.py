@@ -7,6 +7,19 @@ Create Date: 2026-05-08 00:00:00.000000
 Hand-written initial migration covering every ORM model declared in
 ``src/db/models.py`` at Phase 0. Subsequent migrations should be generated
 with ``alembic revision --autogenerate``.
+
+Postgres vs SQLite enum handling
+--------------------------------
+Postgres needs ``CREATE TYPE foo AS ENUM (...)`` before any table can
+reference the type. SQLite has no native enum — ``sa.Enum`` falls back to
+``VARCHAR + CHECK`` there. So the upgrade does dialect-aware creation:
+
+1. On Postgres, emit ``CREATE TYPE`` once per enum at the top of upgrade().
+2. Column-level ``sa.Enum(..., create_type=False)`` references the type
+   without re-emitting ``CREATE TYPE`` (which would fail with
+   ``DuplicateObject`` on Postgres).
+3. On SQLite, the explicit creation is skipped; ``create_type=False`` is
+   harmless because there is no native type to create.
 """
 
 from __future__ import annotations
@@ -22,31 +35,45 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-# Enum names — Postgres needs them registered explicitly.
-MARKET = sa.Enum("US", "HK", name="market")
-STRATEGY_TYPE = sa.Enum("BUILT_IN", "CUSTOM", name="strategytype")
-STRATEGY_STATUS = sa.Enum("ACTIVE", "ARCHIVED", "DELETED", name="strategystatus")
-ACCOUNT_TYPE = sa.Enum("SHADOW", "LIVE", name="accounttype")
-SIGNAL_DIRECTION = sa.Enum("BUY", "SELL", "HOLD", name="signaldirection")
-REGIME_LABEL = sa.Enum(
-    "EARNINGS_DRIVEN",
-    "LIQUIDITY_DRIVEN",
-    "POLICY_DRIVEN",
-    "RISK_OFF",
-    "TRANSITIONING",
-    name="regimelabel",
-)
+# Single source of truth for enum values. Used both for explicit CREATE TYPE
+# on Postgres and for column references via _enum() below.
+ENUMS: list[tuple[str, tuple[str, ...]]] = [
+    ("market", ("US", "HK")),
+    ("strategytype", ("BUILT_IN", "CUSTOM")),
+    ("strategystatus", ("ACTIVE", "ARCHIVED", "DELETED")),
+    ("accounttype", ("SHADOW", "LIVE")),
+    ("signaldirection", ("BUY", "SELL", "HOLD")),
+    (
+        "regimelabel",
+        (
+            "EARNINGS_DRIVEN",
+            "LIQUIDITY_DRIVEN",
+            "POLICY_DRIVEN",
+            "RISK_OFF",
+            "TRANSITIONING",
+        ),
+    ),
+]
+_ENUM_VALUES: dict[str, tuple[str, ...]] = dict(ENUMS)
+
+
+def _enum(name: str) -> sa.Enum:
+    """Reference an enum by name without (re)creating it."""
+    return sa.Enum(*_ENUM_VALUES[name], name=name, create_type=False)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    for enum in (MARKET, STRATEGY_TYPE, STRATEGY_STATUS, ACCOUNT_TYPE, SIGNAL_DIRECTION, REGIME_LABEL):
-        enum.create(bind, checkfirst=True)
+    if bind.dialect.name == "postgresql":
+        # Pre-create types so subsequent op.create_table() calls can reference
+        # them without re-emitting CREATE TYPE.
+        for name, values in ENUMS:
+            sa.Enum(*values, name=name).create(bind, checkfirst=True)
 
     op.create_table(
         "stocks",
         sa.Column("code", sa.String(32), primary_key=True),
-        sa.Column("market", MARKET, primary_key=True),
+        sa.Column("market", _enum("market"), primary_key=True),
         sa.Column("name", sa.String(256), nullable=False),
         sa.Column("industry", sa.String(128)),
         sa.Column("market_cap", sa.Numeric(20, 6)),
@@ -57,7 +84,7 @@ def upgrade() -> None:
         "price_bars",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("code", sa.String(32), nullable=False, index=True),
-        sa.Column("market", MARKET, nullable=False),
+        sa.Column("market", _enum("market"), nullable=False),
         sa.Column("date", sa.Date(), nullable=False, index=True),
         sa.Column("open", sa.Numeric(20, 6), nullable=False),
         sa.Column("high", sa.Numeric(20, 6), nullable=False),
@@ -72,8 +99,8 @@ def upgrade() -> None:
         "strategies",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("name", sa.String(128), nullable=False, unique=True),
-        sa.Column("type", STRATEGY_TYPE, nullable=False),
-        sa.Column("status", STRATEGY_STATUS, nullable=False),
+        sa.Column("type", _enum("strategytype"), nullable=False),
+        sa.Column("status", _enum("strategystatus"), nullable=False),
         sa.Column("parameters", sa.JSON(), nullable=False),
         sa.Column("description", sa.Text()),
         sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -84,8 +111,14 @@ def upgrade() -> None:
     op.create_table(
         "accounts",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("type", ACCOUNT_TYPE, nullable=False),
-        sa.Column("strategy_id", sa.String(36), sa.ForeignKey("strategies.id"), nullable=False, index=True),
+        sa.Column("type", _enum("accounttype"), nullable=False),
+        sa.Column(
+            "strategy_id",
+            sa.String(36),
+            sa.ForeignKey("strategies.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("cash", sa.Numeric(20, 6), nullable=False),
         sa.Column("initial_capital", sa.Numeric(20, 6), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -94,22 +127,36 @@ def upgrade() -> None:
     op.create_table(
         "positions",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("account_id", sa.String(36), sa.ForeignKey("accounts.id"), nullable=False, index=True),
+        sa.Column(
+            "account_id",
+            sa.String(36),
+            sa.ForeignKey("accounts.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("stock_code", sa.String(32), nullable=False),
-        sa.Column("market", MARKET, nullable=False),
+        sa.Column("market", _enum("market"), nullable=False),
         sa.Column("quantity", sa.Numeric(20, 6), nullable=False),
         sa.Column("avg_cost", sa.Numeric(20, 6), nullable=False),
         sa.Column("opened_at", sa.DateTime(), nullable=False),
-        sa.UniqueConstraint("account_id", "stock_code", "market", name="uq_position_account_stock"),
+        sa.UniqueConstraint(
+            "account_id", "stock_code", "market", name="uq_position_account_stock"
+        ),
     )
 
     op.create_table(
         "trades",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("account_id", sa.String(36), sa.ForeignKey("accounts.id"), nullable=False, index=True),
+        sa.Column(
+            "account_id",
+            sa.String(36),
+            sa.ForeignKey("accounts.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("stock_code", sa.String(32), nullable=False, index=True),
-        sa.Column("market", MARKET, nullable=False),
-        sa.Column("direction", SIGNAL_DIRECTION, nullable=False),
+        sa.Column("market", _enum("market"), nullable=False),
+        sa.Column("direction", _enum("signaldirection"), nullable=False),
         sa.Column("quantity", sa.Numeric(20, 6), nullable=False),
         sa.Column("price", sa.Numeric(20, 6), nullable=False),
         sa.Column("fee", sa.Numeric(20, 6), nullable=False),
@@ -120,10 +167,16 @@ def upgrade() -> None:
     op.create_table(
         "signals",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("strategy_id", sa.String(36), sa.ForeignKey("strategies.id"), nullable=False, index=True),
+        sa.Column(
+            "strategy_id",
+            sa.String(36),
+            sa.ForeignKey("strategies.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("stock_code", sa.String(32), nullable=False, index=True),
-        sa.Column("market", MARKET, nullable=False),
-        sa.Column("direction", SIGNAL_DIRECTION, nullable=False),
+        sa.Column("market", _enum("market"), nullable=False),
+        sa.Column("direction", _enum("signaldirection"), nullable=False),
         sa.Column("buy_low", sa.Numeric(20, 6)),
         sa.Column("buy_high", sa.Numeric(20, 6)),
         sa.Column("stop_loss", sa.Numeric(20, 6)),
@@ -138,7 +191,13 @@ def upgrade() -> None:
     op.create_table(
         "performance_snapshots",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("account_id", sa.String(36), sa.ForeignKey("accounts.id"), nullable=False, index=True),
+        sa.Column(
+            "account_id",
+            sa.String(36),
+            sa.ForeignKey("accounts.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("date", sa.Date(), nullable=False, index=True),
         sa.Column("nav", sa.Numeric(20, 6), nullable=False),
         sa.Column("cash", sa.Numeric(20, 6), nullable=False),
@@ -153,7 +212,7 @@ def upgrade() -> None:
         "assistant_advice",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("date", sa.Date(), nullable=False, unique=True, index=True),
-        sa.Column("regime_label", REGIME_LABEL, nullable=False),
+        sa.Column("regime_label", _enum("regimelabel"), nullable=False),
         sa.Column("regime_payload", sa.JSON(), nullable=False),
         sa.Column("allocation_payload", sa.JSON(), nullable=False),
         sa.Column("narrative", sa.Text()),
@@ -187,5 +246,6 @@ def downgrade() -> None:
     op.drop_table("stocks")
 
     bind = op.get_bind()
-    for enum in (REGIME_LABEL, SIGNAL_DIRECTION, ACCOUNT_TYPE, STRATEGY_STATUS, STRATEGY_TYPE, MARKET):
-        enum.drop(bind, checkfirst=True)
+    if bind.dialect.name == "postgresql":
+        for name, values in reversed(ENUMS):
+            sa.Enum(*values, name=name).drop(bind, checkfirst=True)
