@@ -132,13 +132,14 @@ See `docs/INVARIANTS.md` for the full list. Summary:
 
 ## Known TODOs deferred to later WPs
 
-- A real LLMGateway adapter (LiteLLM-backed) lands in V0.6 (WP-2.5 / WP-3.4).
+- A real LLMGateway adapter (LiteLLM-backed) lands in V0.6 (WP-2.4 V0.6 +
+  the AI narrative module called out in `version-plan.md` §V0.6).
 - DB-backed audit log for LLM calls — currently in-memory ring buffer.
 - Real data adapters under `src/data/` (yfinance, Tushare/AKShare for HK) —
   WP-1.x.
-- Authenticated API and JWT — WP-4.5.
-- Notification adapters (Telegram, email) — WP-4.4.
-- Frontend pages — WP-4.x.
+- Notification adapters (Telegram / email / WeWork) — WP-4.2.
+- Authenticated API and JWT — WP-5.1.
+- Frontend pages — WP-4.3 / WP-4.4 / WP-4.5.
 
 ---
 

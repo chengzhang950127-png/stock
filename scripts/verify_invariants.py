@@ -61,14 +61,16 @@ def check_invariant_1() -> list[str]:
     decision_roots = [
         SRC / "strategies",
         SRC / "portfolio",
-        SRC / "assistant",  # except for narrative.py / news_parser.py once they exist
+        SRC / "assistant",  # except for narrative.py once it exists
     ]
     files = _iter_py_files(decision_roots)
     hits = _grep(files, LLM_IMPORT_RE)
-    # Permit two named modules where AI is allowed (placeholder paths — created in WP-2.5 / WP-3.4).
+    # Permit two named modules where AI is allowed.
+    # Paths align with wbs.md (WP-2.4 outputs src/strategies/event_driven.py)
+    # and version-plan.md §V0.6 ("AI 叙事生成模块" — src/assistant/narrative.py).
     allowed_suffixes = {
         "src/assistant/narrative.py",
-        "src/strategies/event_driven_news.py",
+        "src/strategies/event_driven.py",
     }
     hits = [h for h in hits if h[0].relative_to(ROOT).as_posix() not in allowed_suffixes]
     if hits:

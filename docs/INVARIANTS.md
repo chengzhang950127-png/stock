@@ -13,8 +13,10 @@ Stock screening, buy / sell pricing, regime classification, asset allocation,
 and strategy promotion / demotion are all pure code rules. AI is permitted
 in **exactly two** places:
 
-1. News parsing inside the event-driven strategy (`src/strategies/event_driven_news.py`)
-2. Narrative generation inside the investment assistant (`src/assistant/narrative.py`)
+1. News parsing inside the event-driven strategy
+   (`src/strategies/event_driven.py` — file path per `wbs.md` WP-2.4)
+2. Narrative generation inside the investment assistant
+   (`src/assistant/narrative.py` — module called out in `version-plan.md` §V0.6)
 
 Both wrap the LLM Gateway, never the underlying SDKs.
 
@@ -24,7 +26,7 @@ Both wrap the LLM Gateway, never the underlying SDKs.
 grep -rn 'import litellm\|from openai\|import anthropic' \
   src/strategies/ src/portfolio/ src/assistant/ \
   | grep -v 'src/assistant/narrative.py' \
-  | grep -v 'src/strategies/event_driven_news.py'
+  | grep -v 'src/strategies/event_driven.py'
 ```
 
 Expected: empty output.
