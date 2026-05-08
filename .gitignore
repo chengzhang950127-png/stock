@@ -1,0 +1,72 @@
+# --- Secrets — absolutely never in git ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
+build/
+*.egg
+.tox/
+
+# --- Node / Frontend ---
+node_modules/
+.next/
+.nuxt/
+.vite/
+.parcel-cache/
+frontend/dist/
+frontend/build/
+
+# --- Database ---
+*.db
+*.sqlite
+*.sqlite3
+data/cache/
+data/raw/
+
+# --- User data — never in repo ---
+user_data/
+broker_credentials/
+positions/
+trades/
+
+# --- IDE / Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Local development ---
+local/
+tmp/
+.cache/
+
+# --- uv lockfile is committed; uv's tool cache isn't ---
+.uv/

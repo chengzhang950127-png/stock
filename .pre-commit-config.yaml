@@ -1,0 +1,27 @@
+# Optional — run `pre-commit install` after `uv sync --extra dev` to enable.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: verify-invariants
+        name: verify architectural invariants
+        entry: uv run python scripts/verify_invariants.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

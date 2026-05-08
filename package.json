@@ -1,0 +1,7 @@
+{
+  "name": "quant-system-workspace",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Workspace root for quant-system frontend.",
+  "workspaces": ["frontend"]
+}
