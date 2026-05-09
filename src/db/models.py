@@ -57,6 +57,9 @@ class StockORM(Base):
 
     code: Mapped[str] = mapped_column(String(32), primary_key=True)
     market: Mapped[Market] = mapped_column(SQLEnum(Market), primary_key=True)
+    # ISO 4217 — CHECK constraint applied in the Alembic migration
+    # (kept as plain String(3) for SQLite/Postgres parity; see migration 0002).
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     industry: Mapped[str | None] = mapped_column(String(128))
     market_cap: Mapped[Decimal | None] = money_col()
@@ -113,6 +116,7 @@ class AccountORM(Base):
     strategy_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("strategies.id"), nullable=False, index=True
     )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     cash: Mapped[Decimal] = money_col(nullable=False)
     initial_capital: Mapped[Decimal] = money_col(nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -134,6 +138,7 @@ class PositionORM(Base):
     )
     stock_code: Mapped[str] = mapped_column(String(32), nullable=False)
     market: Mapped[Market] = mapped_column(SQLEnum(Market), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     quantity: Mapped[Decimal] = money_col(nullable=False)
     avg_cost: Mapped[Decimal] = money_col(nullable=False)
     opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -150,6 +155,7 @@ class TradeORM(Base):
     )
     stock_code: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     market: Mapped[Market] = mapped_column(SQLEnum(Market), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     direction: Mapped[SignalDirection] = mapped_column(SQLEnum(SignalDirection), nullable=False)
     quantity: Mapped[Decimal] = money_col(nullable=False)
     price: Mapped[Decimal] = money_col(nullable=False)
