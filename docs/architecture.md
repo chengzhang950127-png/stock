@@ -374,6 +374,20 @@ A 股驱动力分类法的美港股版本：
 - 所有敏感配置通过 `.env` + 加密存储
 - 公开仓库默认假设代码可见，敏感信息必须在代码外
 
+> **⚠️ 当前运行状态偏离本节原始建议**
+>
+> 本节及第 11 节、`review-protocol.md` 仓库设置原本推荐 **公开 GitHub 仓库**。
+> 项目目前实际状态为 **private 仓库**（[chengzhang950127-png/stock](https://github.com/chengzhang950127-png/stock)），由项目所有者于 Phase 0 完成后主动切换为 private。
+>
+> **原因**：早期开发期容错优先 —— 一旦不慎泄漏敏感信息，private 仓库给追溯和补救留出更大缓冲。`.gitignore` + `scripts/verify_invariants.py` 第 #7 条不变量本身已足够强，但多一层访问控制并不冲突。
+>
+> **何时回到 public**：达成下列任一条件即考虑切回：
+> 1. 进入 V0.7（实盘上线）前 —— 公开历史是 `version-plan.md` 文末提到的"信任建立资产"，越早公开越好
+> 2. 完整跑过一轮 `git log --all -p | grep -iE 'api[_-]?key|secret|password|token'` 全局历史扫描确认无泄漏
+> 3. 评审者批准
+>
+> 切回 public 时记得同步删除本注脚（或改写为已转 public 的事实记录）。
+
 ---
 
 ## 11. 与现有项目的关系

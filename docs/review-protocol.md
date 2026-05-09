@@ -32,6 +32,10 @@
 ### 仓库设置
 
 - **公开 GitHub 仓库**（强烈建议——见 `architecture.md` 第 11 节关于安全的说明）
+  > **⚠️ 现行偏离**：项目目前实际为 **private 仓库**
+  > （[chengzhang950127-png/stock](https://github.com/chengzhang950127-png/stock)）。
+  > 详细原因和何时切回 public 的判据见 `architecture.md` §10.3 注脚。
+  > 本协议其他条款（评审记录入 git、敏感信息扫描等）在 private 模式下**不变**。
 - 主分支 `main` 始终保持可运行状态
 - 每个 WP 一个特性分支，命名 `wp-X.X-描述`，例如 `wp-2.3-trend-momentum`
 
