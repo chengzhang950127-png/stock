@@ -63,31 +63,23 @@ def test_position_size_fixed_risk_tight_stop_yields_more_shares():
     tight = position_size_fixed_risk(
         Decimal("100000"), Decimal("100"), Decimal("99"), risk_pct=0.01
     )
-    wide = position_size_fixed_risk(
-        Decimal("100000"), Decimal("100"), Decimal("90"), risk_pct=0.01
-    )
+    wide = position_size_fixed_risk(Decimal("100000"), Decimal("100"), Decimal("90"), risk_pct=0.01)
     assert tight > wide
 
 
 def test_position_size_fixed_risk_rejects_stop_above_entry():
     with pytest.raises(ValueError, match="stop_loss"):
-        position_size_fixed_risk(
-            Decimal("100000"), Decimal("100"), Decimal("110"), risk_pct=0.01
-        )
+        position_size_fixed_risk(Decimal("100000"), Decimal("100"), Decimal("110"), risk_pct=0.01)
 
 
 def test_position_size_fixed_risk_rejects_zero_risk_pct():
     with pytest.raises(ValueError, match="risk_pct"):
-        position_size_fixed_risk(
-            Decimal("100000"), Decimal("100"), Decimal("90"), risk_pct=0.0
-        )
+        position_size_fixed_risk(Decimal("100000"), Decimal("100"), Decimal("90"), risk_pct=0.0)
 
 
 def test_position_size_fixed_risk_rejects_risk_pct_above_one():
     with pytest.raises(ValueError, match="risk_pct"):
-        position_size_fixed_risk(
-            Decimal("100000"), Decimal("100"), Decimal("90"), risk_pct=1.5
-        )
+        position_size_fixed_risk(Decimal("100000"), Decimal("100"), Decimal("90"), risk_pct=1.5)
 
 
 # ---------- position_size_kelly ----------

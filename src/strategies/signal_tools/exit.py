@@ -45,7 +45,7 @@ def stop_loss_from_atr(
 
     >>> from decimal import Decimal
     >>> stop_loss_from_atr(Decimal("171.5"), Decimal("3.5"))
-    Decimal('164.5')
+    Decimal('164.50')
     """
     _check_positive("entry_price", entry_price)
     _check_non_negative("atr_value", atr_value)
@@ -97,7 +97,7 @@ def take_profit_from_risk_reward(
 
     >>> from decimal import Decimal
     >>> take_profit_from_risk_reward(Decimal("171.5"), Decimal("164.5"))
-    Decimal('185.5')
+    Decimal('185.50')
     """
     _check_positive("entry_price", entry_price)
     _check_positive("stop_loss", stop_loss)
@@ -125,7 +125,7 @@ def trailing_stop(
 
     >>> from decimal import Decimal
     >>> trailing_stop(Decimal("180"), Decimal("3.5"))
-    Decimal('169.5')
+    Decimal('169.50')
     """
     _check_positive("current_high", current_high)
     _check_non_negative("atr_value", atr_value)
