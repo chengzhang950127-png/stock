@@ -272,10 +272,35 @@ class PerformanceSnapshot(BaseModel):
 
 
 class PerformanceMetrics(BaseModel):
-    """Aggregate metrics computed over a window."""
+    """Aggregate metrics computed over a window.
+
+    Two distinct return fields capture the V0.1 dividend-handling design
+    documented in ``docs/architecture.md §10.5`` #5:
+
+    - ``total_return`` — close-based **price return**, computed as
+      ``nav[-1] / nav[0] - 1``. NAV uses raw ``close`` (#B1 "MTM uses
+      close"), so this is the price-only path. Compares apples-to-apples
+      against yfinance ``Close`` ratio.
+    - ``total_return_with_dividends`` — adj_close-based **total return**,
+      computed as ``prod(1 + daily_return) - 1`` where each
+      ``daily_return`` is in the adj_close frame (engine
+      ``_compute_daily_return_adj``). This is the dividend-reinvested
+      path. Compares apples-to-apples against yfinance ``Adj Close``
+      ratio (the standard "5-year SPY total return" benchmark).
+
+    The two diverge by ≈ dividend reinvestment PV (per §10.5 #5);
+    the SPY acceptance gate's ±2% tolerance applies to
+    ``total_return_with_dividends`` (the apples-to-apples comparison
+    against public 5y SPY total return).
+
+    ``annual_return`` and ``annual_return_with_dividends`` are the
+    annualised versions of each (geometric mean over the calendar span).
+    """
 
     total_return: float
+    total_return_with_dividends: float
     annual_return: float
+    annual_return_with_dividends: float
     sharpe: float
     sortino: float
     max_drawdown: float

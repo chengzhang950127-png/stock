@@ -198,7 +198,9 @@ def test_performance_snapshot_round_trip():
 def test_performance_metrics_round_trip():
     m = PerformanceMetrics(
         total_return=0.15,
+        total_return_with_dividends=0.17,
         annual_return=0.18,
+        annual_return_with_dividends=0.20,
         sharpe=1.4,
         sortino=1.7,
         max_drawdown=0.08,
@@ -207,6 +209,33 @@ def test_performance_metrics_round_trip():
         avg_holding_days=12.5,
     )
     assert _round_trip(m) == m
+
+
+def test_performance_metrics_round_trip_with_dividend_fields():
+    """PerformanceMetrics serializes both TR fields cleanly (Blocker 2 方案 A).
+
+    Regression test for r1 评审: confirms the contract carries
+    ``total_return`` (close-based price return) and
+    ``total_return_with_dividends`` (adj_close-based TR) as separate
+    fields, plus their respective annualized variants.
+    """
+    m = PerformanceMetrics(
+        total_return=0.802,  # SPY 5y close ratio ~+80%
+        total_return_with_dividends=0.965,  # SPY 5y adj_close ratio ~+96.5%
+        annual_return=0.125,
+        annual_return_with_dividends=0.144,
+        sharpe=0.9,
+        sortino=1.1,
+        max_drawdown=0.34,
+        calmar=0.42,
+        win_rate=0.0,
+        avg_holding_days=0.0,
+    )
+    rebuilt = _round_trip(m)
+    assert rebuilt == m
+    # Spot-check both new fields survive serialization.
+    assert rebuilt.total_return_with_dividends == 0.965
+    assert rebuilt.annual_return_with_dividends == 0.144
 
 
 # ---- Investment assistant ----
@@ -275,7 +304,9 @@ def test_performance_archive_round_trip():
         archive_date=date(2026, 5, 8),
         metrics=PerformanceMetrics(
             total_return=0.0,
+            total_return_with_dividends=0.0,
             annual_return=0.0,
+            annual_return_with_dividends=0.0,
             sharpe=0.0,
             sortino=0.0,
             max_drawdown=0.0,

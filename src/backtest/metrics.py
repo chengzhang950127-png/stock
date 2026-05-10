@@ -211,7 +211,9 @@ def calculate_metrics(
     if not snapshots:
         return PerformanceMetrics(
             total_return=0.0,
+            total_return_with_dividends=0.0,
             annual_return=0.0,
+            annual_return_with_dividends=0.0,
             sharpe=0.0,
             sortino=0.0,
             max_drawdown=0.0,
@@ -235,7 +237,11 @@ def calculate_metrics(
 
     return PerformanceMetrics(
         total_return=tr,
+        # Placeholder — compounded TR computation lands in the next commit
+        # (this commit is purely the contract extension + stub).
+        total_return_with_dividends=tr,
         annual_return=ar,
+        annual_return_with_dividends=ar,
         sharpe=sharpe,
         sortino=sortino,
         max_drawdown=mdd,
