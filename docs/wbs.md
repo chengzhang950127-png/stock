@@ -11,6 +11,7 @@
 | 阶段 | 内容 | 并行度 | 估时（单人单会话连续工作） |
 |------|------|--------|----------|
 | Phase 0 | 基础脚手架与共享契约 | 串行（1 会话） | 0.5-1 天 |
+| **Phase 0.5** | **货币字段补丁（v1.1 新增）** | **串行（1 会话）** | **0.25 天** |
 | Phase 1 | 数据层 | 5 路并行 | 4-6 天 |
 | Phase 2 | 策略与组合 | 6-8 路并行 | 6-9 天 |
 | Phase 3 | 投资助手 | 4 路并行 | 3-5 天 |
@@ -85,6 +86,45 @@
 - **估时**：0.5 个会话
 
 **Phase 0 总验收**：所有后续 WP 可以基于这套接口和工具开始开发，无 blocking issue。
+
+---
+
+## Phase 0.5: 货币字段补丁（v1.1 新增，必须先于 V0.1 实施）
+
+**目标**：在 V0.1 数据层和策略层落地之前，把 `Currency` 枚举和 4 个核心表的 `currency` 字段补到契约层。这是 Phase 0 评审遗漏、由 architecture.md v1.1 §10.4 提出的硬性约束。
+
+**为什么单独成一个 Phase**：
+
+1. 与 Phase 0 同样属于"接口契约层"补丁，不能与 V0.1 的并行 WP 同时进行（会让 WP-1.1 / WP-2.1 / WP-2.7 拿到不同版本的 `Stock` / `Account` 类型）
+2. 范围足够小（单 WP，1 个会话内能完成），单独成版本便于评审和合入
+3. 标注"v1.1 新增"明确这是补丁性质，不是新功能
+
+### WP-0.5.1 Currency 字段补丁
+
+- **范围**：
+  - `src/contracts.py`：新增 `Currency(str, Enum) {USD, HKD}` 枚举；给 `Stock`、`Account`、`Position`、`Trade` 增加 `currency: Currency` 必填字段；新增 `currency_for_market(market: Market) -> Currency` 工具函数
+  - `src/db/models.py`：4 个 ORM 表新增 `currency` 列（`String(3) NOT NULL`，CHECK 约束限定 `{USD, HKD}`）
+  - `src/db/migrations/versions/0002_add_currency.py`：Alembic 增量迁移。对已有数据按 market 字段反推 currency 默认值（虽然 Phase 0 数据库为空，但保持迁移可重放）
+  - `tests/test_contracts.py`：4 个模型的 round-trip 测试增加 currency 字段；新增 `test_currency_for_market` 工具测试
+  - `docs/architecture.md` 第 10.4 节本身已在 v1.1 落地，无需再改
+- **输入**：架构文档 v1.1 §10.4
+- **输出**：上述文件改动 + 一条 `wp-0.5-currency` 特性分支
+- **依赖**：Phase 0 已合入 main
+- **不做**：
+  - 不增加 FXRate 对象（V0.6 才需要）
+  - 不增加 CNY（V1.x 扩 A 股时再加）
+  - 不改 `Signal` 模型（信号继承 stock 的 currency，不冗余存储）
+  - 不改业务逻辑（数据层、策略层都还没实现，没有调用方需要适配）
+- **验收**：
+  - `pytest tests/ -v` 全过（原 26 + 新增 round-trip 与工具测试）
+  - `python scripts/verify_invariants.py` 全过
+  - `alembic upgrade head` 在 SQLite 内存库和 Postgres 上都干净通过
+  - `alembic downgrade base` 也能干净回滚（确认迁移可逆）
+  - `make check` 全过（lint + format + mypy + verify + test）
+  - `python scripts/generate_contracts_md.py` 重新生成的 CONTRACTS.md 与 docs/CONTRACTS.md 零 diff
+- **估时**：1 个 Claude Code 会话（约 1-2 小时）
+
+**Phase 0.5 总验收**：当 V0.1 的 WP-1.1 / WP-2.1 / WP-2.7 等 4 路并行启动时，所有 Implementer 拿到的 `Stock` / `Account` / `Position` / `Trade` 都带 currency 字段，无歧义。
 
 ---
 
@@ -284,14 +324,17 @@
 
 ### WP-2.8 持仓管理与 P&L
 
-- **范围**：`Account` 状态机（cash + positions + transactions）、信号执行模拟器、每日 mark-to-market、P&L 归因。**同一套代码服务于影子账户和（未来的）实施账户**
+- **范围**：`Account` 状态机（cash + positions + transactions）、信号执行模拟器、每日 mark-to-market、P&L 归因、**`SignalRepository` 集中处理 Pydantic Signal ↔ ORM SignalORM 的双向转换**（特别是 `buy_range: tuple[Decimal, Decimal]` ↔ `(buy_low, buy_high)` 两列的拍平/还原）。**同一套代码服务于影子账户和（未来的）实施账户**
 - **输入**：信号 + 价格数据
-- **输出**：`src/portfolio/manager.py` + `src/portfolio/pnl.py`
-- **依赖**：WP-0.2, WP-2.5
+- **输出**：`src/portfolio/manager.py` + `src/portfolio/pnl.py` + `src/portfolio/signal_repository.py`
+- **依赖**：WP-0.2, WP-2.5, **Phase 0.5（Currency 字段）**
 - **验收**：
   - 完整的开仓/平仓/调仓动作正确
   - mark-to-market 每日运行
   - P&L 归因可分到每只股票、每个策略
+  - **跨币种支持**：港股账户的 cash / position / mark-to-market 全部以 HKD 记账；P&L 输出区分本币 P&L 和（V0.6 起）等值 USD P&L
+  - `SignalRepository.from_pydantic(signal: Signal) -> SignalORM` 和 `to_pydantic(orm: SignalORM) -> Signal` 双向转换有单测覆盖；调用方（回测引擎、API 层）禁止直接拼装 ORM 字段
+  - 影子账户初始资本严格遵循 `architecture.md §4.3`（每账户独立 100K USD 起始）
 - **估时**：2-3 个会话
 
 ### WP-2.9 策略生命周期管理器
@@ -498,28 +541,36 @@ class LLMGateway:
     async def complete(
         self,
         prompt: str,
+        *,
         response_schema: type[BaseModel],
         model: str = "claude-3-5-sonnet-20241022",
         temperature: float = 0.0,
+        max_tokens: int = 4096,
     ) -> BaseModel: ...
 ```
+
+`response_schema` 是 keyword-only（`*` 之后），调用方必须显式传名——这避免误传成 prompt 的位置参数。`max_tokens` 显式列入签名，防止隐式上限漂移。
 
 ### Signal 契约
 
 ```python
 class Signal(BaseModel):
-    stock_code: str
-    direction: Literal["BUY", "SELL", "HOLD"]
-    buy_range: tuple[float, float] | None
-    stop_loss: float | None
-    take_profit: float | None
-    position_size_pct: float
-    confidence: float  # 0-1
-    reason_code: str
-    reason_narrative: str | None
-    generated_at: datetime
+    id: str                                         # UUID
     strategy_id: str
+    stock_code: str
+    market: Market                                  # 必填，便于跨市场推断币种
+    direction: SignalDirection                      # BUY / SELL / HOLD
+    buy_range: tuple[Decimal, Decimal] | None       # (low, high)，价格用 Decimal
+    stop_loss: Decimal | None
+    take_profit: Decimal | None
+    position_size_pct: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason_code: str
+    reason_narrative: str | None = None             # AI 生成的可读理由（V0.6+）
+    generated_at: datetime
 ```
+
+> **v1.1 修订说明**：原 v1.0 示例使用 `float` 表示价格、缺失 `id` / `market` / `strategy_id`，且用 `Literal["BUY", "SELL", "HOLD"]` 而非 `SignalDirection` 枚举。**实际实现侧（`src/contracts.py:204-220`）已正确使用 `Decimal` + 完整字段 + 枚举**——这是"实现先行倒逼文档对齐"的健康偏离。下游 WP（特别是 WP-2.5 / WP-2.7 / WP-2.8）所有引用以本节 v1.1 为准。
 
 ---
 
@@ -529,3 +580,4 @@ class Signal(BaseModel):
 |------|------|----------|
 | 初始 | v1.0 | 35 个 WP 完整定义 |
 | 2026-05-10 | v1.2 | WP-2.7 启动前补丁：完整重写 WP-2.7「回测引擎」段，把 architecture.md v1.2 §10.5 的 9 条回测语义、INVARIANT #8（look-ahead 项目级）、回测层 INVARIANT #B1-B4 全部写入验收标准；校准目标从原"60-65%/±0.5%"改为"lump-sum SPY ±2%，目标值由 Architect 在 Implementer 跑通后基于同源 yfinance 数据给定"；明确 BuyAndHoldStrategy 归 `src/backtest/_calibration_strategies.py` 而非 `src/strategies/`；明确 walk_forward 仅锁接口签名留 V0.5 |
+| 2026-05-10 | v1.3 | Architect (WP-2.7 r1) doc-only 同步 v1.1 已通过但未进 repo 的内容：(1) 总体节奏表新增 Phase 0.5 行；(2) 新增 Phase 0.5「货币字段补丁」章节，含 WP-0.5.1 完整规格（这是 architecture.md §10.4 落地的 WP）；(3) WP-2.8「持仓管理与 P&L」范围加入 SignalRepository（Pydantic Signal ↔ ORM SignalORM 双向转换，含 buy_range tuple ↔ buy_low/buy_high 双列），依赖加 Phase 0.5，验收加跨币种支持 + §4.3 影子账户初始资本引用；(4) Signal 契约示例从 `float` 改为 `Decimal`、补齐 `id` / `market` / `strategy_id`、`Literal[...]` 改 `SignalDirection`，附加 v1.1 修订说明；(5) LLMGateway 契约示例补 `*` keyword-only 标记 + `max_tokens`，与 `src/llm/gateway.py` 实际签名对齐。本次 v1.3 不改任何 WP 范围、依赖或验收门槛——纯文档对齐 |
