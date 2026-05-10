@@ -232,15 +232,55 @@
 
 ### WP-2.7 回测引擎
 
-- **范围**：向量化回测核心（NumPy + Pandas）、滑点/手续费建模、walk-forward 验证框架、多策略并行回测调度
-- **输入**：策略对象 + 历史数据
-- **输出**：`src/backtest/engine.py` + `src/backtest/metrics.py` + `PerformanceSnapshot` 序列
-- **依赖**：WP-2.1, WP-1.x
+- **范围**：向量化回测核心（NumPy + Pandas）、滑点/手续费建模、walk-forward 验证框架（**V0.5 才填实现，本 WP 仅锁接口签名**）、多策略并行接口路径不堵死。**必须严守 `architecture.md §10.5` 回测语义 + 项目级 INVARIANT #8（look-ahead）+ 回测层 INVARIANT #B1-B4**
+- **输入**：策略对象 + 历史数据 + `ExecutionCostModel`
+- **输出**：
+  - `src/backtest/engine.py` — `BacktestEngine` 主引擎
+  - `src/backtest/data_views.py` — `PointInTimeDataView` + `LookaheadBiasError`
+  - `src/backtest/execution.py` — `ExecutionCostModel` + slippage / fee 函数
+  - `src/backtest/metrics.py` — Sharpe / Sortino / MaxDD / Calmar 等
+  - `src/backtest/walk_forward.py` — 接口签名 + `NotImplementedError` + TODO(V0.5)
+  - `src/backtest/_calibration_strategies.py` — `BuyAndHoldStrategy` 校准基准（仅供回测自校验）
+  - `src/backtest/cli.py` — `python -m src.backtest.cli run --strategy ... --calibration-mode`
+  - `src/backtest/INVARIANTS.md` — 回测层局部约束（B1-B4）
+  - `PerformanceSnapshot` 序列产出
+- **依赖**：WP-2.1（StrategyBase + factor_lib 已落地）、Phase 0.5（Currency 字段）；WP-1.x 在运行期需要，但本 WP 开发期允许用 mock 数据
+- **不做**：
+  - 不实现 BuyAndHold 之外的具体策略（BuyAndHold 仅作校准基准例外，归到 `_calibration_strategies.py` 内部用，不进 `src/strategies/`）
+  - 不接 LLM、不接外部 API
+  - 不做组合优化 / 风险平价 / 日内 / 高频回测（V1.x 范围）
+  - 不实现 point-in-time index membership（V0.1 用静态 universe，README 标注 survivorship bias 偏乐观）
+  - 不实现 walk_forward 函数体（仅锁接口签名，留 V0.5）
+  - 不实现 HK 市场的 ExecutionCostModel（仅 US_DEFAULT_COST，HK 留 WP-1.2 / V0.2）
+  - 不在 `src/contracts.py` 增加新模型（`ExecutionCostModel` 放 `src/backtest/execution.py`，是回测层契约不是项目级契约；如需扩展 PerformanceMetrics 字段先停下 TODO）
 - **验收**：
-  - 在 SPY 5 年数据上跑 buy-and-hold 回测，结果对得上 Yahoo Finance 公开数据（误差 < 0.5%）
-  - 多策略并行回测无相互干扰
-  - 滑点和手续费建模可配置
-- **估时**：3-4 个会话
+  - **校准 acceptance gate（不可让步）**：
+    - 用 lump-sum buy-and-hold（T0 一次性 100K USD 买入 SPY，零股允许，持有到 end_date）跑 SPY 2020-01-01 到 2024-12-31 回测
+    - Implementer 输出实际累计收益数字 + 详细中间值（NAV 起止、分红次数、手续费总计）
+    - Architect 对照同源 yfinance SPY 数据给出 ±2% 容忍区间
+    - 校准未通过不能 PASS
+  - **Look-ahead bias 防护（INVARIANT #8）**：
+    - 实现 `PointInTimeDataView(as_of: date)` 显式过滤
+    - `tests/backtest/test_data_views.py` 验证 `get_bars(code)` 严格只返回 `bar.date <= as_of`
+    - `tests/backtest/test_no_lookahead.py` 构造一个故意访问未来数据的假策略，断言抛出 `LookaheadBiasError`
+  - **Survivorship bias 诚实声明**：
+    - V0.1 用静态 universe，README 明确标注偏乐观，TODO 指向 V1.x WP-1.6（point-in-time index membership tracking）
+  - **close vs adj_close 边界（INVARIANT #B1）**：
+    - 决策用 close、收益归因用 adj_close、MTM 用 close
+    - `tests/backtest/test_close_used_for_decisions.py` + `test_adj_close_used_for_returns.py` 显式校验
+  - **执行时点正确性（INVARIANT #B3）**：
+    - T 日决策 + T+1 open 执行
+    - `tests/backtest/test_execution_timing.py` 覆盖最后一个可执行交易日 = `end_date - 1` 的边界
+  - **ExecutionCostModel currency 一致性（INVARIANT #B2）**：
+    - `US_DEFAULT_COST` 给定，HK 留 TODO
+    - currency 不一致时 raise，测试覆盖
+  - **position_size_pct 基数与同日顺序（INVARIANT #B4）**：
+    - 测试覆盖 cash 不足按比例缩减、SELL→BUY 顺序、确定性 tiebreak（`(-confidence, stock_code)`）
+  - **多策略并行接口不堵死**：
+    - `BacktestEngine` 实例化层支持单策略 + 多个 engine 并行；路径不被本 WP 单策略实现锁死（V0.2 多策略并行回测会用上）
+  - **测试规模**：单元测试 ≥ 35 个；整体测试 ≥ 60 个不回归
+  - **工具链**：`make check` + `python scripts/verify_invariants.py` 全绿
+- **估时**：3-4 个会话（约 6-10 小时）
 
 ### WP-2.8 持仓管理与 P&L
 
@@ -488,3 +528,4 @@ class Signal(BaseModel):
 | 日期 | 版本 | 修订内容 |
 |------|------|----------|
 | 初始 | v1.0 | 35 个 WP 完整定义 |
+| 2026-05-10 | v1.2 | WP-2.7 启动前补丁：完整重写 WP-2.7「回测引擎」段，把 architecture.md v1.2 §10.5 的 9 条回测语义、INVARIANT #8（look-ahead 项目级）、回测层 INVARIANT #B1-B4 全部写入验收标准；校准目标从原"60-65%/±0.5%"改为"lump-sum SPY ±2%，目标值由 Architect 在 Implementer 跑通后基于同源 yfinance 数据给定"；明确 BuyAndHoldStrategy 归 `src/backtest/_calibration_strategies.py` 而非 `src/strategies/`；明确 walk_forward 仅锁接口签名留 V0.5 |

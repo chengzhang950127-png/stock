@@ -135,3 +135,41 @@ git ls-files | grep -E "\.env$"
 ```
 
 Both are expected to be empty.
+
+---
+
+## #8 — Look-ahead bias 防护（v1.2 新增）
+
+任何回测、历史模拟、信号回放代码访问历史数据必须经 `PointInTimeDataView` 包装。直接索引 `historical_data[code][i:]` 读 i+1 之后的 bar、或在策略代码里访问 `as_of` 之后的数据视为违规。
+
+**强制要求**：
+
+- 回测引擎 `BacktestEngine.step(current_date)` 必须每步重建 `PointInTimeDataView(historical_data, current_date)` 后再传给策略
+- 策略代码不能直接持有 `historical_data` 全集引用，只能通过 `view.get_bars(code)` / `view.get_universe()` 访问
+- `view.get_bars(code)` 内部必须用 `[b for b in all_bars[code] if b.date <= self.as_of]` **显式过滤**，不允许"约定调用方截断"
+- 单元测试必须包含一个故意访问未来数据的假策略，断言抛出 `LookaheadBiasError`
+
+**校验命令**：
+
+```bash
+# 策略代码不能直接访问 historical_data 全集
+grep -rn "historical_data\[" src/strategies/ src/portfolio/ src/assistant/ 2>/dev/null
+
+# 策略代码访问 bars 不能用裸切片读"未来"
+grep -rnE "bars\[[^]]*:[^]]*\]" src/strategies/ 2>/dev/null
+```
+
+期望：第一条无任何输出（策略只通过 PointInTimeDataView 访问数据）；第二条无可疑切片（review 时人工确认负索引切片如 `bars[-N:]` 是合规的"取最近 N 日"，不是读未来）。
+
+**作用域**：项目级。回测、paper trading、策略冻结校验、信号回放系统都受此约束。
+
+**v1.2 之前的合规性回填**：WP-2.1 已实现的 `factor_lib._align_to_date` 是更严格的私有函数（在因子函数入口就丢弃 `bar.date > as_of` 的 bars），属于"第二道闸"，与 PointInTimeDataView 的"第一道闸"相互独立、不冲突。WP-2.1 因此对 #8 自然合规，无需追溯修改。
+
+---
+
+## 修订历史
+
+| 日期 | 版本 | 修订内容 |
+|------|------|----------|
+| 初始 | v1.0 | Phase 0 七条不变量定稿 |
+| 2026-05-10 | v1.2 | WP-2.7 启动前补丁：新增不变量 #8「Look-ahead bias 防护」，作用域项目级，强制要求 PointInTimeDataView 显式过滤 + LookaheadBiasError 单测覆盖；同步 `docs/architecture.md §10.5` + `src/backtest/INVARIANTS.md` |
