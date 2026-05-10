@@ -199,7 +199,9 @@ class BacktestEngine:
             decision = self.strategy.exit_rules(position, current_date)
             if decision.action == ExitAction.HOLD:
                 continue
-            qty = self._resolve_exit_qty(self._positions[code], decision.action, decision.target_quantity)
+            qty = self._resolve_exit_qty(
+                self._positions[code], decision.action, decision.target_quantity
+            )
             if qty > 0:
                 exit_decisions.append((code, qty))
 
@@ -249,7 +251,9 @@ class BacktestEngine:
             return
         qty = min(order.shares, state.quantity)
         intended_price = bar.open  # T+1 open execution per §10.5 #2
-        fill_price = apply_slippage(intended_price, SignalDirection.SELL, self.cost_model.slippage_bps)
+        fill_price = apply_slippage(
+            intended_price, SignalDirection.SELL, self.cost_model.slippage_bps
+        )
         fee = calculate_fee(qty, self.cost_model.fee_per_share, self.cost_model.min_fee)
         gross = (qty * fill_price).quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
         self._cash += gross - fee
@@ -275,7 +279,9 @@ class BacktestEngine:
         if bar is None:
             return
         intended_price = bar.open
-        fill_price = apply_slippage(intended_price, SignalDirection.BUY, self.cost_model.slippage_bps)
+        fill_price = apply_slippage(
+            intended_price, SignalDirection.BUY, self.cost_model.slippage_bps
+        )
 
         # Cash budget; partial fill if insufficient.
         max_shares = order.shares
@@ -283,11 +289,15 @@ class BacktestEngine:
         usable_cash = max(Decimal("0"), self._cash - self.cost_model.min_fee)
         if usable_cash <= 0:
             return
-        affordable_shares = (usable_cash / fill_price).quantize(_SHARE_QUANTUM, rounding=ROUND_HALF_UP)
+        affordable_shares = (usable_cash / fill_price).quantize(
+            _SHARE_QUANTUM, rounding=ROUND_HALF_UP
+        )
         # Re-check after rounding (could overshoot by quantum * fill_price).
         while affordable_shares > 0 and (
             affordable_shares * fill_price
-            + calculate_fee(affordable_shares, self.cost_model.fee_per_share, self.cost_model.min_fee)
+            + calculate_fee(
+                affordable_shares, self.cost_model.fee_per_share, self.cost_model.min_fee
+            )
             > self._cash
         ):
             affordable_shares -= _SHARE_QUANTUM
@@ -333,7 +343,8 @@ class BacktestEngine:
                 (existing.avg_cost_close * existing.quantity + fill_price * actual_shares) / new_qty
             ).quantize(_PRICE_QUANTUM, rounding=ROUND_HALF_UP)
             existing.avg_cost_adj = (
-                (existing.avg_cost_adj * existing.quantity + bar.adj_close * actual_shares) / new_qty
+                (existing.avg_cost_adj * existing.quantity + bar.adj_close * actual_shares)
+                / new_qty
             ).quantize(_PRICE_QUANTUM, rounding=ROUND_HALF_UP)
             existing.quantity = new_qty
 
@@ -377,7 +388,9 @@ class BacktestEngine:
             target_dollars = nav * Decimal(str(sig.position_size_pct))
             if target_dollars <= 0:
                 continue
-            target_shares = (target_dollars / bar.close).quantize(_SHARE_QUANTUM, rounding=ROUND_HALF_UP)
+            target_shares = (target_dollars / bar.close).quantize(
+                _SHARE_QUANTUM, rounding=ROUND_HALF_UP
+            )
             if target_shares <= 0:
                 continue
             self._pending_orders.append(
@@ -404,9 +417,7 @@ class BacktestEngine:
         daily_return = self._compute_daily_return_adj(current_date)
 
         cumulative_return = (
-            float((nav - self._initial_nav) / self._initial_nav)
-            if self._initial_nav > 0
-            else 0.0
+            float((nav - self._initial_nav) / self._initial_nav) if self._initial_nav > 0 else 0.0
         )
 
         if nav > self._peak_nav:
