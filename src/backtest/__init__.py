@@ -12,6 +12,7 @@ performance numbers. Correctness over performance.
 """
 
 from src.backtest.data_views import LookaheadBiasError, PointInTimeDataView
+from src.backtest.engine import BacktestEngine, BacktestResult
 from src.backtest.execution import (
     US_DEFAULT_COST,
     ExecutionCostModel,
@@ -44,4 +45,6 @@ __all__ = [
     "total_return_from_navs",
     "annualised_return",
     "compute_trade_stats",
+    "BacktestEngine",
+    "BacktestResult",
 ]
