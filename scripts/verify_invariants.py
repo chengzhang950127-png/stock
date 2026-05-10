@@ -209,6 +209,11 @@ def check_invariant_6() -> list[str]:
         import src.strategies as strategies_pkg
 
         for _, name, _ in pkgutil.iter_modules(strategies_pkg.__path__):
+            # Skip underscore-prefixed modules — these are internal helpers
+            # / calibration tools (e.g. `_calibration_strategies.py` under
+            # src/backtest/), not production strategies. See WP-2.7 v1.2.
+            if name.startswith("_"):
+                continue
             mod = importlib.import_module(f"src.strategies.{name}")
             for cls_name in dir(mod):
                 cls = getattr(mod, cls_name)
@@ -253,6 +258,35 @@ def check_invariant_7() -> list[str]:
     return issues
 
 
+HISTORICAL_DATA_DIRECT_ACCESS_RE = re.compile(r"historical_data\s*\[")
+
+
+def check_invariant_8() -> list[str]:
+    """#8 — look-ahead bias protection (project-level, v1.2 added).
+
+    Decision-path code must access historical bars only through
+    ``PointInTimeDataView``. Direct subscripting of ``historical_data``
+    (the raw dict the engine holds) by strategies / portfolio / assistant
+    code is the canonical lookahead pattern this invariant blocks.
+
+    See ``docs/INVARIANTS.md`` #8 + ``src/backtest/INVARIANTS.md`` #B1.
+    """
+    decision_roots = [
+        SRC / "strategies",
+        SRC / "portfolio",
+        SRC / "assistant",
+    ]
+    files = _iter_py_files(decision_roots)
+    hits = _grep(files, HISTORICAL_DATA_DIRECT_ACCESS_RE)
+    if hits:
+        return [
+            "INVARIANT #8 violated — direct historical_data[...] access on the "
+            "decision path; route through PointInTimeDataView instead:",
+            _format_hits(hits),
+        ]
+    return []
+
+
 def main() -> int:
     checks = [
         check_invariant_1,
@@ -262,6 +296,7 @@ def main() -> int:
         check_invariant_5,
         check_invariant_6,
         check_invariant_7,
+        check_invariant_8,
     ]
     failures: list[str] = []
     for check in checks:
