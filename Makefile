@@ -12,8 +12,9 @@ dev: ## Run the API locally with hot reload (Postgres must be up)
 test: ## Run pytest
 	uv run pytest tests/ -v
 
-lint: ## Lint + type-check
+lint: ## Lint + format-check + type-check
 	uv run ruff check src/ tests/ scripts/
+	uv run ruff format --check src/ tests/ scripts/
 	uv run mypy src/
 
 format: ## Auto-format and apply ruff fixes
