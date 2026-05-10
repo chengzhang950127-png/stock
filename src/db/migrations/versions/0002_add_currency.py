@@ -49,13 +49,24 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-# Tables that gain a currency column, paired with the CHECK constraint name.
-TABLES: list[tuple[str, str]] = [
+# Tables that have a `market` column we can backfill currency from.
+TABLES_WITH_MARKET: list[tuple[str, str]] = [
     ("stocks", "ck_stocks_currency_iso4217"),
-    ("accounts", "ck_accounts_currency_iso4217"),
     ("positions", "ck_positions_currency_iso4217"),
     ("trades", "ck_trades_currency_iso4217"),
 ]
+
+# Tables without `market` — currency must come from another source. In Phase
+# 0 the schema is empty, so there is nothing to backfill; we just NOT-NULL
+# the freshly-added column. If a future migration runs against non-empty
+# data, accounts.currency must already be populated by an earlier step or
+# this migration will fail at SET NOT NULL — which is the desired loud
+# failure mode.
+TABLES_WITHOUT_MARKET: list[tuple[str, str]] = [
+    ("accounts", "ck_accounts_currency_iso4217"),
+]
+
+ALL_TABLES: list[tuple[str, str]] = TABLES_WITH_MARKET + TABLES_WITHOUT_MARKET
 
 # market value -> currency value. Source of truth lives in
 # ``src.contracts.currency_for_market``; we mirror it here because Alembic
@@ -77,18 +88,32 @@ def _backfill_sql() -> str:
 def upgrade() -> None:
     backfill = _backfill_sql()
 
-    # Step 1: add nullable column.
-    for table, _ in TABLES:
+    # Step 1: add nullable column on every table.
+    for table, _ in ALL_TABLES:
         op.add_column(table, sa.Column("currency", sa.String(3), nullable=True))
 
-    # Step 2: backfill from market. No-op when the table is empty.
-    for table, _ in TABLES:
+    # Step 2a: backfill currency from market on the tables that have one.
+    for table, _ in TABLES_WITH_MARKET:
         op.execute(f"UPDATE {table} SET currency = {backfill}")
 
-    # Step 3: tighten to NOT NULL and add CHECK. SQLite needs batch mode for
-    # the NOT NULL flip; the CHECK constraint is dialect-portable as written.
+    # Step 2b: tables without a market column require currency to be
+    # populated by the application layer or by a separate data migration.
+    # Phase 0 is empty so the SET NOT NULL below holds trivially; assert
+    # this loudly to fail any future replay against non-empty data.
+    for table, _ in TABLES_WITHOUT_MARKET:
+        result = op.get_bind().execute(
+            sa.text(f"SELECT COUNT(*) FROM {table} WHERE currency IS NULL")
+        ).scalar()
+        if result and result > 0:
+            raise RuntimeError(
+                f"{table!r} has {result} rows without currency. "
+                f"Backfill them via a data migration before re-running 0002."
+            )
+
+    # Step 3: tighten to NOT NULL and add CHECK on every table. SQLite needs
+    # batch mode for the NOT NULL flip; CHECK syntax is dialect-portable.
     allowed = ", ".join(f"'{v}'" for v in ALLOWED_CURRENCIES)
-    for table, ck_name in TABLES:
+    for table, ck_name in ALL_TABLES:
         with op.batch_alter_table(table) as batch:
             batch.alter_column("currency", existing_type=sa.String(3), nullable=False)
             batch.create_check_constraint(ck_name, f"currency IN ({allowed})")
@@ -96,7 +121,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Reverse order: drop CHECK, drop column.
-    for table, ck_name in TABLES:
+    for table, ck_name in ALL_TABLES:
         with op.batch_alter_table(table) as batch:
             batch.drop_constraint(ck_name, type_="check")
             batch.drop_column("currency")
