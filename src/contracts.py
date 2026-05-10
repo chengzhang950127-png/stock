@@ -31,6 +31,13 @@ class Market(str, Enum):
     HK = "HK"
 
 
+class Currency(str, Enum):
+    """ISO 4217 三字母代码。V1.x 港股 A 股扩展时再加 CNY。"""
+
+    USD = "USD"
+    HKD = "HKD"
+
+
 class StrategyType(str, Enum):
     BUILT_IN = "BUILT_IN"
     CUSTOM = "CUSTOM"
@@ -68,6 +75,26 @@ class RegimeLabel(str, Enum):
 
 
 # ====================================================================
+# Market → currency mapping
+# ====================================================================
+
+
+_MARKET_CURRENCY: dict[Market, Currency] = {
+    Market.US: Currency.USD,
+    Market.HK: Currency.HKD,
+}
+
+
+def currency_for_market(market: Market) -> Currency:
+    """Map a market to its native trading currency.
+
+    This is the single source of truth — no business code may inline
+    ``if market == Market.US: return Currency.USD`` style branching.
+    """
+    return _MARKET_CURRENCY[market]
+
+
+# ====================================================================
 # Reference data
 # ====================================================================
 
@@ -79,9 +106,10 @@ class Stock(BaseModel):
 
     code: str  # e.g. "AAPL", "0700.HK"
     market: Market
+    currency: Currency
     name: str
     industry: str | None = None
-    market_cap: Decimal | None = None  # in USD for US, HKD for HK
+    market_cap: Decimal | None = None
     listed_date: date | None = None
 
 
@@ -168,6 +196,7 @@ class Account(BaseModel):
     id: str
     type: AccountType
     strategy_id: str
+    currency: Currency
     cash: Decimal
     initial_capital: Decimal
     created_at: datetime
@@ -179,6 +208,7 @@ class Position(BaseModel):
     account_id: str
     stock_code: str
     market: Market
+    currency: Currency
     quantity: Decimal
     avg_cost: Decimal
     opened_at: datetime
@@ -191,6 +221,7 @@ class Trade(BaseModel):
     account_id: str
     stock_code: str
     market: Market
+    currency: Currency
     direction: SignalDirection
     quantity: Decimal
     price: Decimal
@@ -314,12 +345,15 @@ class PerformanceArchive(BaseModel):
 __all__ = [
     # enums
     "Market",
+    "Currency",
     "StrategyType",
     "StrategyStatus",
     "AccountType",
     "SignalDirection",
     "ExitAction",
     "RegimeLabel",
+    # helpers
+    "currency_for_market",
     # reference data
     "Stock",
     "PriceBar",

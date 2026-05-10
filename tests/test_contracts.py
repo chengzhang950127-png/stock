@@ -12,6 +12,7 @@ from src.contracts import (
     AccountType,
     AssetAllocation,
     AssistantAdvice,
+    Currency,
     CustomBlendParameters,
     ExitAction,
     ExitDecision,
@@ -31,6 +32,7 @@ from src.contracts import (
     StrategyStatus,
     StrategyType,
     Trade,
+    currency_for_market,
 )
 
 
@@ -43,7 +45,7 @@ def _round_trip(model):
 
 
 def test_stock_round_trip():
-    s = Stock(code="AAPL", market=Market.US, name="Apple Inc.")
+    s = Stock(code="AAPL", market=Market.US, currency=Currency.USD, name="Apple Inc.")
     assert _round_trip(s) == s
 
 
@@ -102,6 +104,7 @@ def test_account_round_trip():
         id="11111111-1111-1111-1111-111111111111",
         type=AccountType.SHADOW,
         strategy_id="22222222-2222-2222-2222-222222222222",
+        currency=Currency.USD,
         cash=Decimal("100000.00"),
         initial_capital=Decimal("100000.00"),
         created_at=datetime(2026, 1, 1, 0, 0, 0),
@@ -114,6 +117,7 @@ def test_position_round_trip():
         account_id="11111111-1111-1111-1111-111111111111",
         stock_code="AAPL",
         market=Market.US,
+        currency=Currency.USD,
         quantity=Decimal("10.5"),
         avg_cost=Decimal("180.00"),
         opened_at=datetime(2026, 1, 5, 9, 30, 0),
@@ -127,6 +131,7 @@ def test_trade_round_trip():
         account_id="11111111-1111-1111-1111-111111111111",
         stock_code="AAPL",
         market=Market.US,
+        currency=Currency.USD,
         direction=SignalDirection.BUY,
         quantity=Decimal("10"),
         price=Decimal("180.50"),
@@ -134,6 +139,22 @@ def test_trade_round_trip():
         executed_at=datetime(2026, 1, 5, 9, 30, 0),
     )
     assert _round_trip(t) == t
+
+
+# ---- Currency helper ----
+
+
+def test_currency_for_market_us():
+    assert currency_for_market(Market.US) == Currency.USD
+
+
+def test_currency_for_market_hk():
+    assert currency_for_market(Market.HK) == Currency.HKD
+
+
+def test_currency_enum_values():
+    """ISO 4217 three-letter codes; expand this set when V1.x adds CNY."""
+    assert {c.value for c in Currency} == {"USD", "HKD"}
 
 
 # ---- Signals ----

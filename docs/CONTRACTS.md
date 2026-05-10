@@ -9,6 +9,11 @@ Source of truth: `src/contracts.py`. Run `make contracts` after changing the Pyd
 - `SHADOW` = `'SHADOW'`
 - `LIVE` = `'LIVE'`
 
+### `Currency`
+
+- `USD` = `'USD'`
+- `HKD` = `'HKD'`
+
 ### `ExitAction`
 
 - `HOLD` = `'HOLD'`
@@ -52,6 +57,7 @@ Source of truth: `src/contracts.py`. Run `make contracts` after changing the Pyd
 - `id`: `str`
 - `type`: `AccountType`
 - `strategy_id`: `str`
+- `currency`: `Currency`
 - `cash`: `Decimal`
 - `initial_capital`: `Decimal`
 - `created_at`: `datetime`
@@ -139,6 +145,7 @@ An open holding. ``quantity`` is Decimal to allow fractional shares.
 - `account_id`: `str`
 - `stock_code`: `str`
 - `market`: `Market`
+- `currency`: `Currency`
 - `quantity`: `Decimal`
 - `avg_cost`: `Decimal`
 - `opened_at`: `datetime`
@@ -191,6 +198,7 @@ A tradeable instrument identifier + static descriptive fields.
 
 - `code`: `str`
 - `market`: `Market`
+- `currency`: `Currency`
 - `name`: `str`
 - `industry`: `str | None`
 - `market_cap`: `decimal.Decimal | None`
@@ -232,6 +240,7 @@ An executed (or simulated) order fill.
 - `account_id`: `str`
 - `stock_code`: `str`
 - `market`: `Market`
+- `currency`: `Currency`
 - `direction`: `SignalDirection`
 - `quantity`: `Decimal`
 - `price`: `Decimal`
