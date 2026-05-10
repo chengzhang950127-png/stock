@@ -153,7 +153,7 @@ def test_currency_for_market_hk():
 
 
 def test_currency_enum_values():
-    """ISO 4217 三字母代码，未来扩 CNY 时这个测试需要更新。"""
+    """ISO 4217 three-letter codes; expand this set when V1.x adds CNY."""
     assert {c.value for c in Currency} == {"USD", "HKD"}
 
 
