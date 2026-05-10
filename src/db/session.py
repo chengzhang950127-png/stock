@@ -8,6 +8,7 @@ added when the API needs it; the choice is intentionally deferred.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -38,6 +39,21 @@ SessionLocal = sessionmaker(
 
 def get_session() -> Iterator[Session]:
     """FastAPI dependency-style generator yielding a session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Context-manager session for non-FastAPI callers (CLIs, scripts).
+
+    Commits stay caller-controlled; this helper only guarantees the session
+    is closed on exit. Use this from synchronous scripts where ``with`` is
+    cleaner than the dependency-style ``get_session`` generator.
+    """
     db = SessionLocal()
     try:
         yield db
