@@ -215,3 +215,40 @@ def test_buy_and_hold_first_snapshot_is_initial_cash() -> None:
     first = result.performance_snapshots[0]
     assert first.cash == Decimal("100000.00")
     assert first.positions_value == Decimal("0.00")
+
+
+def test_compounded_daily_returns_match_total_return() -> None:
+    """When close == adj_close (no dividends), compounded daily_returns
+    must equal metrics.total_return_with_dividends within rounding tolerance.
+
+    Regression for r1 偏离 1 + 2: ensures the two TR paths agree when there
+    is no dividend divergence. Acts as a sanity check for the adj_close
+    accounting frame fix — the engine's daily_return frame is correct
+    enough that compounding it back gives the close-based total return.
+    """
+    start, end = date(2020, 1, 1), date(2024, 12, 31)
+    # Ramp 100 → 200; close == adj_close so the two TR paths should agree.
+    bars = _ramp_bars("SYN", start, end, start_price=100.0, end_price=200.0)
+    engine = BacktestEngine(
+        strategy=BuyAndHoldStrategy(ticker="SYN"),
+        account=_build_account(start),
+        universe=make_single_stock_universe("SYN"),
+        historical_data={"SYN": bars},
+        cost_model=US_DEFAULT_COST,
+        start_date=start,
+        end_date=end,
+    )
+    result = engine.run()
+
+    # Compound daily returns directly from snapshots — independent
+    # of metrics.calculate_metrics so we're cross-checking by hand.
+    compounded = math.prod(1.0 + s.daily_return for s in result.performance_snapshots) - 1.0
+
+    assert abs(compounded - result.metrics.total_return_with_dividends) < 0.005, (
+        f"compounded daily_returns ({compounded:.4f}) should match "
+        f"metrics.total_return_with_dividends "
+        f"({result.metrics.total_return_with_dividends:.4f})"
+    )
+    # And both should be near total_return (close == adj_close ⇒ no
+    # dividend divergence).
+    assert abs(result.metrics.total_return_with_dividends - result.metrics.total_return) < 0.01

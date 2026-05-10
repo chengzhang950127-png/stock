@@ -246,6 +246,95 @@ def test_compounded_return_from_daily_negatives_compound_correctly() -> None:
 # ---- TR vs TR-with-dividends divergence (Blocker 2 方案 A regression) ----
 
 
+def test_buy_and_hold_sharpe_positive_for_smooth_uptrend() -> None:
+    """1304-day smooth ~80%/+96.5% (close/adj_close) uptrend → Sharpe must
+    be a large positive.
+
+    Regression for r1 偏离 1: pre-fix ``_compute_daily_return_adj()`` mixed
+    close-based prior NAV (denominator) with adj_close-based today NAV
+    (numerator). On the SPY-like calibration series — close ramps 80%,
+    adj_close ramps 96.5%, the numerator started ~16% lower than the
+    denominator from day 1 — the engine reported Sharpe ≈ -27.6 with
+    1296/1304 days as fake "-8.2%" drops. Post-fix the same series should
+    give Sharpe in (3, 200), a confidently positive number.
+
+    The adj_close > close split is essential for this test to reproduce
+    the bug: with adj_close == close, both frames coincide and the bug
+    is silent.
+    """
+    from datetime import timedelta as _td
+
+    from src.backtest._calibration_strategies import (
+        BuyAndHoldStrategy,
+        make_single_stock_universe,
+    )
+    from src.backtest.engine import BacktestEngine
+    from src.backtest.execution import US_DEFAULT_COST
+    from src.contracts import Account, AccountType, PriceBar
+
+    start = date(2020, 1, 1)
+    end = date(2024, 12, 31)
+    days: list[date] = []
+    cur = start
+    while cur <= end:
+        if cur.weekday() < 5:
+            days.append(cur)
+        cur += _td(days=1)
+    n = len(days)
+
+    bars: list[PriceBar] = []
+    # SPY-like shape: close ramps 100 → 180 (+80%), adj_close ramps 95 → 179
+    # (~+88%). adj_close starts BELOW close (back-adjusted by future
+    # dividends) — real SPY 2020-01-02 has adj_close/close ≈ 0.95. This is
+    # the bug-triggering shape: day-1 close-based MTM (the buggy formula's
+    # denominator) > day-1 adj-based today_nav (numerator) → fake -5% drop
+    # every day under the buggy formula. Post-fix the artifact is confined
+    # to a single ~-5% on the BUY day.
+    for i, d in enumerate(days):
+        t = i / (n - 1) if n > 1 else 0.0
+        close_price = 100.0 + (180.0 - 100.0) * t  # 100 → 180 (+80%)
+        adj_price = 95.0 + (179.0 - 95.0) * t  # 95 → 179 (~+88%)
+        bars.append(
+            PriceBar(
+                code="SYN",
+                market=Market.US,
+                date=d,
+                open=Decimal(f"{close_price:.4f}"),
+                high=Decimal(f"{close_price:.4f}"),
+                low=Decimal(f"{close_price:.4f}"),
+                close=Decimal(f"{close_price:.4f}"),
+                adj_close=Decimal(f"{adj_price:.4f}"),
+                volume=1_000_000,
+            )
+        )
+
+    universe = make_single_stock_universe("SYN")
+    account = Account(
+        id="acct-sharpe",
+        type=AccountType.SHADOW,
+        strategy_id="buy-and-hold",
+        currency=Currency.USD,
+        cash=Decimal("100000"),
+        initial_capital=Decimal("100000"),
+        created_at=datetime(2020, 1, 1),
+    )
+    engine = BacktestEngine(
+        strategy=BuyAndHoldStrategy(ticker="SYN"),
+        account=account,
+        universe=universe,
+        historical_data={"SYN": bars},
+        cost_model=US_DEFAULT_COST,
+        start_date=start,
+        end_date=end,
+    )
+    result = engine.run()
+
+    assert 3.0 < result.metrics.sharpe < 200.0, (
+        f"Expected Sharpe in (3, 200) for smooth ~80%/+96.5% uptrend; got "
+        f"{result.metrics.sharpe:.4f} (Blocker 1 frame-fix regression)"
+    )
+
+
 def test_total_return_vs_total_return_with_dividends_diverge_under_dividends() -> None:
     """The two TR fields are equal when daily_return matches NAV ratio
     (no-dividend regime), and divergent when daily_return is dividend-
@@ -268,9 +357,7 @@ def test_total_return_vs_total_return_with_dividends_diverge_under_dividends() -
     # compounded(0.0, 0.10, 0.10) = 1.10 * 1.10 - 1 = 0.21
     assert abs(no_div_metrics.total_return_with_dividends - 0.21) < 1e-9
     # → equal within rounding tolerance.
-    assert abs(
-        no_div_metrics.total_return - no_div_metrics.total_return_with_dividends
-    ) < 1e-9
+    assert abs(no_div_metrics.total_return - no_div_metrics.total_return_with_dividends) < 1e-9
 
     # Case 2: NAV is flat-ish but daily_return reflects dividend reinvestment
     # (adj_close grew faster). This is the divergence the engine produces
@@ -287,6 +374,4 @@ def test_total_return_vs_total_return_with_dividends_diverge_under_dividends() -
     assert abs(div_metrics.total_return_with_dividends - 0.1025) < 1e-9
     # → divergence ~10.25% (≈ dividend reinvestment PV in this synthetic).
     assert div_metrics.total_return_with_dividends > div_metrics.total_return
-    assert (
-        div_metrics.total_return_with_dividends - div_metrics.total_return
-    ) > 0.05
+    assert (div_metrics.total_return_with_dividends - div_metrics.total_return) > 0.05

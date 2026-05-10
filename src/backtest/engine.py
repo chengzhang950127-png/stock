@@ -121,8 +121,12 @@ class BacktestEngine:
     _peak_nav: Decimal = field(default=Decimal("0"), init=False)
     _pending_orders: list[_PendingOrder] = field(default_factory=list, init=False)
     _unexecuted_signals: list[Signal] = field(default_factory=list, init=False)
-    # adj_close accumulator: previous day's per-symbol adj_close, for return calc.
-    _prev_adj_close: dict[str, Decimal] = field(default_factory=dict, init=False)
+    # adj_close-frame "shadow NAV" carried from the previous step. The
+    # daily_return numerator and denominator both come from this frame
+    # (INVARIANT #B1 + §10.5 #5). Initialised to account.cash in
+    # __post_init__: at t=0 the account is fully cash, so adj_NAV ==
+    # close_NAV == cash unambiguously.
+    _prev_adj_nav: Decimal = field(default=Decimal("0"), init=False)
 
     def __post_init__(self) -> None:
         if self.start_date > self.end_date:
@@ -136,6 +140,9 @@ class BacktestEngine:
         self._cash = self.account.cash
         self._initial_nav = self.account.cash
         self._peak_nav = self.account.cash
+        # adj_NAV starts equal to cash (no positions yet → no close vs
+        # adj_close frame ambiguity). See _compute_daily_return_adj.
+        self._prev_adj_nav = self.account.cash
 
     # ---- Public API ----
 
@@ -410,11 +417,14 @@ class BacktestEngine:
 
         daily_return uses adj_close ratio (per #B1); NAV uses close.
         """
+        del view  # snapshot no longer needs the view; positions are scanned via
+        # _most_recent_bar inside _compute_daily_return_adj.
         positions_value = self._positions_value_close(current_date)
         nav = (self._cash + positions_value).quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
 
-        # adj_close-based daily return: weighted by yesterday's positions.
-        daily_return = self._compute_daily_return_adj(current_date)
+        # adj_close-based daily return: kept in its own frame via the
+        # _prev_adj_nav state machine (Blocker 1 fix).
+        daily_return, today_adj_nav = self._compute_daily_return_adj(current_date)
 
         cumulative_return = (
             float((nav - self._initial_nav) / self._initial_nav) if self._initial_nav > 0 else 0.0
@@ -437,11 +447,10 @@ class BacktestEngine:
             )
         )
 
-        # Update prev_adj_close cache for tomorrow.
-        for state in self._positions.values():
-            bar = view.get_bar_on(state.stock.code, current_date)
-            if bar is not None:
-                self._prev_adj_close[state.stock.code] = bar.adj_close
+        # Update adj-frame state for the next step. Must happen AFTER
+        # snapshot append so the next call's denominator matches today's
+        # numerator.
+        self._prev_adj_nav = today_adj_nav
 
     # ---- Helpers ----
 
@@ -526,18 +535,22 @@ class BacktestEngine:
     def _current_nav_at_close(self, current_date: date) -> Decimal:
         return self._cash + self._positions_value_close(current_date)
 
-    def _compute_daily_return_adj(self, current_date: date) -> float:
-        """Daily return as the adj_close-weighted change in positions value plus cash flow.
+    def _compute_daily_return_adj(self, current_date: date) -> tuple[float, Decimal]:
+        """Daily return computed in adj_close frame.
 
-        Uses yesterday's snapshot NAV as the denominator (or initial_nav for day 1).
-        Numerator is today's "adj NAV" — cash + sum(shares * adj_close).
-        Both numerator and denominator are computed in the same units, so dividend
-        / split adjustments fold into the ratio cleanly (per §10.5 #5).
+        Both numerator and denominator are adj_close-based shadow NAVs, so
+        dividend / split adjustments fold cleanly into the ratio (per §10.5
+        #5 + INVARIANT #B1). Returns ``(daily_return, today_adj_nav)`` so
+        the caller can update :attr:`_prev_adj_nav` after appending the
+        snapshot.
+
+        r1 偏离 1 fix (Blocker 1): the previous implementation used
+        ``self._snapshots[-1].nav`` (close-based MTM) as the denominator
+        and an adj_close-based today_nav as the numerator — a frame
+        mismatch that produced fake ~-8% daily drops on adj_close <
+        close (back-adjusted) data. The state machine here keeps the
+        frames aligned.
         """
-        prior_nav = self._snapshots[-1].nav if self._snapshots else self._initial_nav
-        if prior_nav <= 0:
-            return 0.0
-
         today_adj_value = Decimal("0")
         for state in self._positions.values():
             bar = self._most_recent_bar(state.stock.code, current_date)
@@ -547,11 +560,11 @@ class BacktestEngine:
                 today_adj_value += state.quantity * bar.adj_close
         today_adj_nav = self._cash + today_adj_value
 
-        # For day 1 with adj/close split, prior_nav is initial cash; this gives
-        # the right "1-day return" because positions opened today have zero
-        # contribution to prior_nav and a positive contribution today only if
-        # adj_close diverges from purchase price within the day.
-        return float((today_adj_nav - prior_nav) / prior_nav)
+        if self._prev_adj_nav <= 0:
+            return 0.0, today_adj_nav
+
+        daily_return = float((today_adj_nav - self._prev_adj_nav) / self._prev_adj_nav)
+        return daily_return, today_adj_nav
 
     def _to_contract_position(self, state: _PositionState) -> Position:
         return Position(
