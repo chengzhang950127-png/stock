@@ -11,6 +11,7 @@ The vectorized engine is the single source of truth for every strategy's
 performance numbers. Correctness over performance.
 """
 
+from src.backtest.data_views import LookaheadBiasError, PointInTimeDataView
 from src.backtest.execution import (
     US_DEFAULT_COST,
     ExecutionCostModel,
@@ -23,4 +24,6 @@ __all__ = [
     "US_DEFAULT_COST",
     "apply_slippage",
     "calculate_fee",
+    "PointInTimeDataView",
+    "LookaheadBiasError",
 ]
