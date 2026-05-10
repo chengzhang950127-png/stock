@@ -60,8 +60,17 @@ quant-system/
 │   │   ├── audit.py             # In-memory call recorder
 │   │   └── schemas.py           # Cross-business LLM I/O schemas
 │   ├── strategies/base.py       # StrategyBase abstract class
+│   ├── backtest/                # WP-2.7 — vectorized backtest engine
+│   │   ├── INVARIANTS.md        # Backtest-layer invariants (B1-B4)
+│   │   ├── data_views.py        # PointInTimeDataView (anti-lookahead, INVARIANT #8 / #B1)
+│   │   ├── engine.py            # BacktestEngine: T close decide / T+1 open execute
+│   │   ├── execution.py         # ExecutionCostModel + slippage + fees (#B2)
+│   │   ├── metrics.py           # Sharpe / Sortino / MaxDD / Calmar / FIFO trade stats
+│   │   ├── walk_forward.py      # Interface signature only — body in V0.5
+│   │   ├── _calibration_strategies.py  # BuyAndHoldStrategy (calibration anchor only)
+│   │   └── cli.py               # `python -m src.backtest.cli run --strategy buy_and_hold ...`
 │   ├── data/                    # WP-1.x — data acquisition
-│   ├── portfolio/               # WP-2.7 / 2.8 — execution and reconciliation
+│   ├── portfolio/               # WP-2.8 — execution and reconciliation
 │   ├── assistant/               # WP-3.x — investment assistant
 │   ├── api/main.py              # FastAPI entrypoint
 │   └── utils/logging.py         # structlog config
@@ -141,6 +150,74 @@ See `docs/INVARIANTS.md` for the full list. Summary:
 - Notification adapters (Telegram / email / WeWork) — WP-4.2.
 - Authenticated API and JWT — WP-5.1.
 - Frontend pages — WP-4.3 / WP-4.4 / WP-4.5.
+
+---
+
+## Backtest engine — known limitations (V0.1)
+
+- **Survivorship bias**: V0.1 backtests use today's S&P 500 membership for
+  the entire period. Stocks that were in the index in 2020 but were since
+  delisted are missing. This biases V0.1 backtest results upward. Will be
+  fixed in V1.x via WP-1.6 (point-in-time index membership tracking).
+- **`bar.close` vs `bar.adj_close`**: Decisions and MTM use raw `close`.
+  P&L attribution (daily_return / cumulative_return) uses `adj_close`.
+  Mixing these in strategy code is a review-blocking violation. See
+  `src/backtest/INVARIANTS.md` #B1.
+- **Universe is static within a backtest run**: V0.1 fixes universe at
+  `start_date`. Real point-in-time membership awaits V1.x.
+- **Dividends are not modeled as cash flows**: V0.1 relies on `adj_close`
+  to express the implicit "dividend immediately reinvested" assumption.
+  `nav` series (computed from `close`) and total-return series (computed
+  from `adj_close`) typically differ by an amount ≈ dividend reinvestment
+  PV. This is a documented design choice (architecture §10.5 #5), not a
+  bug. V0.7 (broker integration) will model real dividend cash flows.
+- **HK market not supported in V0.1**: Only `US_DEFAULT_COST`
+  (USD-denominated) is implemented. HK execution costs will be added in
+  WP-1.2 / V0.2.
+- **`walk_forward_test` is not implemented**: Interface signature is
+  locked for forward compatibility, but raises `NotImplementedError`.
+  Will be filled in V0.5 for custom-strategy parameter optimization.
+
+### SPY calibration (acceptance gate)
+
+The hard pass/fail for WP-2.7 is that a lump-sum buy-and-hold backtest of
+SPY for 2020-01-01 to 2024-12-31 must reproduce the yfinance-source
+total return within ±2% (target value set by Architect after Implementer
+runs the CLI on real SPY data):
+
+```bash
+# 1. Fetch SPY bars (CSV with date,open,high,low,close,adj_close,volume).
+#    Once WP-1.1 (data adapters) lands, the adapter writes this file directly.
+#    Until then, the reviewer manually downloads from Yahoo Finance.
+
+# 2. Run buy-and-hold via the CLI (calibration mode required):
+uv run python -m src.backtest.cli run \
+    --strategy buy_and_hold \
+    --ticker SPY \
+    --period 2020-01-01:2024-12-31 \
+    --calibration-mode \
+    --csv path/to/spy.csv \
+    --output /tmp/spy_bh.json
+
+# 3. Architect reviews the actual numbers + intermediate values:
+uv run python -c "
+import json
+result = json.load(open('/tmp/spy_bh.json'))
+print('=== SPY lump-sum buy-and-hold 2020-01-01 to 2024-12-31 ===')
+print(f'Initial cash:      {result[\"account_initial_cash\"]}')
+print(f'Final NAV:         {result[\"account_final_nav\"]}')
+print(f'Total return:      {result[\"metrics\"][\"total_return\"]:.4%}')
+print(f'Annual return:     {result[\"metrics\"][\"annual_return\"]:.4%}')
+print(f'Sharpe:            {result[\"metrics\"][\"sharpe\"]:.3f}')
+print(f'Max drawdown:      {result[\"metrics\"][\"max_drawdown\"]:.4%}')
+print(f'Number of trades:  {result[\"trade_count\"]}')  # expect 1 (T0 lump-sum)
+print(f'Total fees:        {result[\"total_fees\"]}')
+"
+```
+
+The engine math itself is pinned by deterministic synthetic-series tests
+in `tests/backtest/test_calibration_spy_buy_and_hold.py` (these run in
+CI without external data).
 
 ---
 
