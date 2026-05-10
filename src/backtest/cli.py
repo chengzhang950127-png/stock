@@ -157,8 +157,14 @@ def _serialize_result(
         "account_final_nav": _money(final_nav),
         "currency": result.account_final.currency.value,
         "metrics": {
+            # close-based price return (compares to yfinance Close ratio)
             "total_return": result.metrics.total_return,
+            # adj_close-based total return (compares to yfinance Adj Close ratio,
+            # the standard "5y total return" benchmark; ±2% acceptance gate
+            # applies HERE, not to total_return).
+            "total_return_with_dividends": result.metrics.total_return_with_dividends,
             "annual_return": result.metrics.annual_return,
+            "annual_return_with_dividends": result.metrics.annual_return_with_dividends,
             "sharpe": result.metrics.sharpe,
             "sortino": result.metrics.sortino,
             "max_drawdown": result.metrics.max_drawdown,
