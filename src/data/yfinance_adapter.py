@@ -43,6 +43,12 @@ register_model(PriceBar)
 _PRICE_TTL = 24 * 60 * 60
 _METADATA_TTL = 7 * 24 * 60 * 60
 
+# yfinance accepts arbitrarily many tickers in one download() call but the
+# response gets unwieldy past ~30 (and at ~50+ a single failed ticker
+# corrupts the response shape). 25 is a good chunk size: ~5x fewer HTTP
+# calls than per-ticker, with manageable failure blast radius.
+_BULK_CHUNK_SIZE = 25
+
 
 class DataFetchError(RuntimeError):
     """Raised when an external data fetch fails after exhausting retries."""
@@ -111,29 +117,74 @@ class YFinanceAdapter:
 
     # ---- Public API ----
 
-    @cached(ttl_seconds=_PRICE_TTL, namespace="YFinanceAdapter.fetch_price_bars")
     async def fetch_price_bars(self, code: str, start: date, end: date) -> list[PriceBar]:
-        """Fetch daily OHLCV bars for ``code`` between ``start`` and ``end``.
+        """Fetch daily OHLCV bars for one ticker between ``start`` and ``end``.
 
-        ``start`` / ``end`` are inclusive on the left and right per yfinance
-        semantics where ``end`` is treated as exclusive — we add one day so
-        callers don't have to remember.
+        Thin wrapper over :meth:`fetch_price_bars_bulk` so single-ticker and
+        bulk paths share one normalisation surface.
+        """
+        result = await self.fetch_price_bars_bulk([code], start, end)
+        return result.get(code, [])
+
+    async def fetch_price_bars_bulk(
+        self, codes: list[str], start: date, end: date
+    ) -> dict[str, list[PriceBar]]:
+        """Bulk fetch OHLCV bars for many tickers between ``start`` and ``end``.
+
+        Internally chunks ``codes`` into groups of ``_BULK_CHUNK_SIZE`` so
+        individual yfinance responses stay parseable, and calls
+        ``yf.download(tickers=[...])`` once per chunk. Failed chunks (after
+        retries) leave the affected tickers mapped to ``[]`` rather than
+        aborting the whole run.
+
+        ``start`` / ``end`` are both inclusive — yfinance treats ``end`` as
+        exclusive, so we bump it by one day so callers don't have to remember.
         """
         if start > end:
             raise ValueError(f"start ({start}) must be <= end ({end})")
+        if not codes:
+            return {}
+
+        result: dict[str, list[PriceBar]] = dict.fromkeys(codes, [])
+        chunks = [
+            codes[i : i + _BULK_CHUNK_SIZE] for i in range(0, len(codes), _BULK_CHUNK_SIZE)
+        ]
+        for chunk in chunks:
+            chunk_result = await self._fetch_chunk_cached(tuple(sorted(chunk)), start, end)
+            for code in chunk:
+                if chunk_result.get(code):
+                    result[code] = chunk_result[code]
+        return result
+
+    @cached(ttl_seconds=_PRICE_TTL, namespace="YFinanceAdapter.fetch_chunk")
+    async def _fetch_chunk_cached(
+        self, sorted_codes: tuple[str, ...], start: date, end: date
+    ) -> dict[str, list[PriceBar]]:
+        """One bulk yfinance call, cached on (sorted_codes, start, end).
+
+        Sorted tuple as cache key so two callers requesting the same chunk
+        in different orders share entries. Returned shape: ``{code: bars}``.
+        """
         await self._respect_rate_limit()
-        # yfinance treats end as exclusive, so bump it.
         from datetime import timedelta
 
-        df = await _retry_async(
-            self._download_history,
-            code,
-            start.isoformat(),
-            (end + timedelta(days=1)).isoformat(),
-            max_attempts=self._max_attempts,
-            base_delay=self._base_delay,
-        )
-        return _normalise_history(code, df)
+        try:
+            df = await _retry_async(
+                self._download_history,
+                list(sorted_codes),
+                start.isoformat(),
+                (end + timedelta(days=1)).isoformat(),
+                max_attempts=self._max_attempts,
+                base_delay=self._base_delay,
+            )
+        except DataFetchError as exc:
+            log.warning(
+                "Bulk chunk fetch failed; affected tickers map to []",
+                tickers=list(sorted_codes),
+                error=str(exc),
+            )
+            return dict.fromkeys(sorted_codes, [])
+        return _normalise_history_bulk(list(sorted_codes), df)
 
     @cached(ttl_seconds=_METADATA_TTL, namespace="YFinanceAdapter.fetch_stock_metadata")
     async def fetch_stock_metadata(self, code: str) -> Stock:
@@ -176,12 +227,14 @@ class YFinanceAdapter:
     # ---- Internals ----
 
     @staticmethod
-    def _download_history(code: str, start: str, end: str) -> Any:
+    def _download_history(codes: str | list[str], start: str, end: str) -> Any:
         # Imported inside the thread so the event loop never blocks on import.
         import yfinance as yf
 
+        # yfinance accepts both a single code string and a list — list path
+        # gives the bulk shape (MultiIndex columns: field × ticker).
         df = yf.download(
-            tickers=code,
+            tickers=codes,
             start=start,
             end=end,
             interval="1d",
@@ -218,19 +271,16 @@ class YFinanceAdapter:
 
 
 def _normalise_history(code: str, df: Any) -> list[PriceBar]:
-    """Convert a yfinance OHLC DataFrame to a list of ``PriceBar``.
+    """Convert a single-ticker yfinance OHLC DataFrame to ``list[PriceBar]``.
 
-    yfinance has multiple shapes depending on whether you ask for one
-    ticker or many; this only handles the single-ticker shape (columns
-    are ``Open / High / Low / Close / Adj Close / Volume``).
+    Columns are expected as ``Open / High / Low / Close / Adj Close / Volume``.
+    Some yfinance versions wrap them in a two-level column index even for a
+    single ticker — we flatten that case.
     """
     if df is None or len(df) == 0:
         return []
 
-    # Some yfinance versions (>=0.2.x) return a 2-level column index even for
-    # a single ticker (top level = field, second level = ticker). Flatten it.
     if hasattr(df.columns, "levels"):
-        # If the second level is a single ticker, drop it.
         try:
             df = df.copy()
             df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
@@ -239,7 +289,6 @@ def _normalise_history(code: str, df: Any) -> list[PriceBar]:
 
     bars: list[PriceBar] = []
     for ts, row in df.iterrows():
-        # Pandas Timestamp -> date
         bar_date = ts.date() if hasattr(ts, "date") else ts
         try:
             close = _to_decimal(row["Close"])
@@ -268,6 +317,50 @@ def _normalise_history(code: str, df: Any) -> list[PriceBar]:
     return bars
 
 
+def _normalise_history_bulk(codes: list[str], df: Any) -> dict[str, list[PriceBar]]:
+    """Split a multi-ticker yfinance DataFrame into per-ticker bar lists.
+
+    yfinance returns either a flat single-ticker frame (when ``len(codes)==1``)
+    or a ``MultiIndex`` frame keyed by ``(field, ticker)`` for many. This
+    function handles both shapes and slices out one sub-frame per code,
+    delegating to :func:`_normalise_history` for actual normalisation.
+
+    Tickers that are missing from the response (delisted, typo, throttled
+    out) map to ``[]`` — the caller decides how to surface that.
+    """
+    if df is None or len(df) == 0:
+        return dict.fromkeys(codes, [])
+
+    result: dict[str, list[PriceBar]] = {}
+    if hasattr(df.columns, "levels") and df.columns.nlevels == 2:
+        # MultiIndex shape — could be (field, ticker) or (ticker, field).
+        level0 = set(df.columns.get_level_values(0))
+        ticker_level = 1 if any(t in level0 for t in ("Open", "Close")) else 0
+        for code in codes:
+            try:
+                sub = df.xs(code, axis=1, level=ticker_level)
+            except KeyError:
+                result[code] = []
+                continue
+            sub = sub.dropna(how="all")
+            result[code] = _normalise_history(code, sub)
+    else:
+        # Single-ticker fallback: yfinance returned a flat frame even though
+        # we asked for one or more tickers (typical when len(codes)==1).
+        if len(codes) == 1:
+            result[codes[0]] = _normalise_history(codes[0], df)
+        else:
+            # Unexpected shape — log once and degrade gracefully.
+            log.warning(
+                "Bulk fetch returned unexpected single-level columns; "
+                "falling back to first ticker only",
+                requested=codes,
+            )
+            for code in codes:
+                result[code] = _normalise_history(code, df) if code == codes[0] else []
+    return result
+
+
 def _normalise_metadata(code: str, info: dict[str, Any]) -> Stock:
     name = info.get("longName") or info.get("shortName") or code
     industry = info.get("industry") or info.get("sector")
@@ -291,4 +384,4 @@ def _normalise_metadata(code: str, info: dict[str, Any]) -> Stock:
     )
 
 
-__all__ = ["DataFetchError", "YFinanceAdapter"]
+__all__ = ["DataFetchError", "YFinanceAdapter", "_BULK_CHUNK_SIZE"]

@@ -27,7 +27,8 @@ from decimal import Decimal
 
 import structlog
 
-from src.contracts import Market, PriceBar
+from src.config import get_settings
+from src.contracts import Market, PriceBar, Stock
 from src.data.repository import PriceBarRepository, StockRepository
 from src.data.universe import get_us_universe
 from src.data.yfinance_adapter import DataFetchError, YFinanceAdapter
@@ -72,9 +73,19 @@ def fetch(market: str, period_days: int) -> int:
     end = date.today()
     start = end - timedelta(days=period_days)
     tickers = get_us_universe()
-    adapter = YFinanceAdapter()
+    settings = get_settings()
+    # YFINANCE_RATE_LIMIT is requests-per-second; 0/None disables throttling.
+    rate_limit: float | None = settings.YFINANCE_RATE_LIMIT or None
+    adapter = YFinanceAdapter(rate_limit_per_sec=rate_limit)
 
-    log.info("Starting fetch", market="US", tickers=len(tickers), start=str(start), end=str(end))
+    log.info(
+        "Starting fetch",
+        market="US",
+        tickers=len(tickers),
+        start=str(start),
+        end=str(end),
+        rate_limit_per_sec=rate_limit,
+    )
 
     async def _run() -> tuple[int, int]:
         bars_total = 0
@@ -83,33 +94,33 @@ def fetch(market: str, period_days: int) -> int:
             stock_repo = StockRepository(session)
             bar_repo = PriceBarRepository(session)
 
-            sem = asyncio.Semaphore(8)
-
-            async def one(code: str) -> tuple[str, list[PriceBar]] | None:
-                async with sem:
-                    try:
-                        bars = await adapter.fetch_price_bars(code, start, end)
-                        return code, bars
-                    except DataFetchError as exc:
-                        log.warning("Skipping ticker — fetch failed", code=code, error=str(exc))
-                        return None
-
-            results = await asyncio.gather(*(one(t) for t in tickers))
-            for r in results:
-                if r is None:
-                    continue
-                code, bars = r
+            # Bars: bulk fetch chunks of ~25 tickers per HTTP call instead
+            # of one call per ticker. ~5x fewer HTTP roundtrips for the
+            # 105-ticker V0.1 universe and the only knob 429 cares about.
+            bars_by_code = await adapter.fetch_price_bars_bulk(tickers, start, end)
+            for code, bars in bars_by_code.items():
                 if not bars:
                     continue
                 bar_repo.upsert_many(bars)
                 bars_total += len(bars)
-                # Best-effort metadata enrichment; never blocks the bar write.
-                try:
-                    stock = await adapter.fetch_stock_metadata(code)
-                    stock_repo.upsert(stock)
-                    stocks_written += 1
-                except DataFetchError as exc:
-                    log.warning("Metadata fetch failed", code=code, error=str(exc))
+
+            # Metadata has no bulk endpoint in yfinance — keep concurrent
+            # but politer (sem=4 + the rate limit configured above).
+            meta_sem = asyncio.Semaphore(4)
+
+            async def one_meta(code: str) -> Stock | None:
+                async with meta_sem:
+                    try:
+                        return await adapter.fetch_stock_metadata(code)
+                    except DataFetchError as exc:
+                        log.warning("Metadata fetch failed", code=code, error=str(exc))
+                        return None
+
+            for stock in await asyncio.gather(*(one_meta(t) for t in tickers)):
+                if stock is None:
+                    continue
+                stock_repo.upsert(stock)
+                stocks_written += 1
         return stocks_written, bars_total
 
     try:
