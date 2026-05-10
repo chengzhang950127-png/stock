@@ -117,6 +117,7 @@ See `docs/INVARIANTS.md` for the full list. Summary:
 | LLM provider in dev / V0.1-V0.5                | Mock                              | Keeps decision-path INVARIANTs verifiable without provider keys.       |
 | DB driver                                      | `psycopg` (v3) — sync only        | Phase 0 doesn't need async DB; can layer asyncpg later if necessary.   |
 | Currency handling                              | `Currency` enum on `Stock` / `Account` / `Position` / `Trade` | Cross-market portfolio MTM and FX accounting need explicit source-of-funds; comments alone are not enough. Added in Phase 0.5 (v1.1 docs). |
+| US universe (V0.1)             | Static 100-stock list + 5 core ETFs | Wikipedia/datahub scrape can wait — V0.1 needs a fast, reproducible starting universe. Point-in-time membership is V1.x. |
 
 ---
 
