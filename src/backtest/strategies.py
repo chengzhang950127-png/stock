@@ -44,6 +44,7 @@ class BuyAndHoldStrategy(StrategyBase):
 
     name = "BuyAndHold"
     type = StrategyType.BUILT_IN
+    parameters: BuyAndHoldParameters  # tighten the base annotation
 
     def __init__(self, parameters: BuyAndHoldParameters) -> None:
         self.parameters = parameters

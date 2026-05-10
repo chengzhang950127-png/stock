@@ -58,22 +58,32 @@ def _load_csv_bars(path: Path, ticker: str) -> list[PriceBar]:
     """Load bars from a Yahoo-Finance-style CSV."""
     from src.contracts import Market
 
+    def _pick(row: dict[str, str], *keys: str) -> str:
+        for k in keys:
+            v = row.get(k)
+            if v is not None and v != "":
+                return v
+        raise KeyError(f"None of {keys} present in row {row}")
+
     bars: list[PriceBar] = []
     with path.open() as f:
         reader = csv.DictReader(f)
         for row in reader:
-            d = date.fromisoformat(row["date"][:10] if "date" in row else row["Date"][:10])
+            d = date.fromisoformat(_pick(row, "date", "Date")[:10])
+            close = _pick(row, "close", "Close")
+            adj_close = _pick(row, "adj_close", "Adj Close", "close", "Close")
+            volume_raw = _pick(row, "volume", "Volume")
             bars.append(
                 PriceBar(
                     code=ticker,
                     market=Market.US,
                     date=d,
-                    open=Decimal(row.get("open", row.get("Open"))),
-                    high=Decimal(row.get("high", row.get("High"))),
-                    low=Decimal(row.get("low", row.get("Low"))),
-                    close=Decimal(row.get("close", row.get("Close"))),
-                    adj_close=Decimal(row.get("adj_close", row.get("Adj Close", row.get("Close")))),
-                    volume=int(float(row.get("volume", row.get("Volume", 0)))),
+                    open=Decimal(_pick(row, "open", "Open")),
+                    high=Decimal(_pick(row, "high", "High")),
+                    low=Decimal(_pick(row, "low", "Low")),
+                    close=Decimal(close),
+                    adj_close=Decimal(adj_close),
+                    volume=int(float(volume_raw)),
                 )
             )
     bars.sort(key=lambda b: b.date)

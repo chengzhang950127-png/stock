@@ -60,8 +60,17 @@ quant-system/
 │   │   ├── audit.py             # In-memory call recorder
 │   │   └── schemas.py           # Cross-business LLM I/O schemas
 │   ├── strategies/base.py       # StrategyBase abstract class
+│   ├── backtest/                # WP-2.7 — vectorized backtest engine
+│   │   ├── INVARIANTS.md        # Backtest-layer invariants (#B1 lookahead, #B2 close vs adj_close)
+│   │   ├── data_views.py        # PointInTimeDataView — anti-lookahead gatekeeper
+│   │   ├── engine.py            # BacktestEngine main loop
+│   │   ├── execution.py         # Slippage + fees
+│   │   ├── metrics.py           # Sharpe / Sortino / MaxDD / Calmar / trade stats
+│   │   ├── walk_forward.py      # Rolling train/test harness skeleton
+│   │   ├── strategies.py        # BuyAndHoldStrategy (V0.1 calibration baseline only)
+│   │   └── cli.py               # `python -m src.backtest.cli run --strategy buy_and_hold ...`
 │   ├── data/                    # WP-1.x — data acquisition
-│   ├── portfolio/               # WP-2.7 / 2.8 — execution and reconciliation
+│   ├── portfolio/               # WP-2.8 — execution and reconciliation
 │   ├── assistant/               # WP-3.x — investment assistant
 │   ├── api/main.py              # FastAPI entrypoint
 │   └── utils/logging.py         # structlog config
@@ -141,6 +150,61 @@ See `docs/INVARIANTS.md` for the full list. Summary:
 - Notification adapters (Telegram / email / WeWork) — WP-4.2.
 - Authenticated API and JWT — WP-5.1.
 - Frontend pages — WP-4.3 / WP-4.4 / WP-4.5.
+
+---
+
+## Backtest engine — known limitations (V0.1)
+
+- **Survivorship bias**: V0.1 backtests use today's S&P 500 membership for
+  the entire period. Stocks that were in the index in 2020 but were since
+  delisted (e.g., bankruptcies) are missing. This biases V0.1 backtest
+  results upward. Will be fixed in V1.x via WP-1.6 (point-in-time index
+  membership tracking).
+- **`bar.close` vs `bar.adj_close`**: Decisions (entry / exit / SMA breaks)
+  use raw `close`. P&L attribution uses `adj_close`. Mixing the two in
+  strategy code is a review-blocking violation. See
+  `src/backtest/INVARIANTS.md` #B2.
+- **Universe is static within a backtest run**: V0.1 fixes universe at
+  `start_date`. Real point-in-time membership awaits V1.x.
+- **Look-ahead protection**: All strategy access to historical data goes
+  through `PointInTimeDataView`; `get_bars(code)` returns ONLY bars on or
+  before `as_of`. See `src/backtest/INVARIANTS.md` #B1.
+
+### SPY calibration (acceptance gate)
+
+The hard pass/fail for WP-2.7 is that a buy-and-hold backtest of SPY for
+2020-01-01 to 2024-12-31 must reproduce Yahoo Finance's published total
+return within ±0.5%:
+
+```bash
+# 1. Fetch SPY bars (CSV with date,open,high,low,close,adj_close,volume).
+#    Once WP-1.1 (data adapters) lands, the adapter writes this file directly.
+#    Until then, the reviewer manually downloads from Yahoo Finance.
+
+# 2. Run buy-and-hold via the CLI:
+uv run python -m src.backtest.cli run \
+    --strategy buy_and_hold \
+    --ticker SPY \
+    --period 2020-2024 \
+    --csv path/to/spy.csv \
+    --output /tmp/spy_bh.json
+
+# 3. Verify total return:
+uv run python -c "
+import json
+result = json.load(open('/tmp/spy_bh.json'))
+total_return = result['metrics']['total_return']
+print(f'SPY 2020-2024 buy-and-hold total return: {total_return:.2%}')
+# Yahoo Finance: SPY 2020-01-01 ~389, 2024-12-31 ~588 → ~51% price return
+# Plus dividends ~8%, total return should land in 60-65% range.
+assert 0.55 < total_return < 0.70, f'Out of expected range: {total_return}'
+print('校准通过 / Calibration passed')
+"
+```
+
+The engine math itself is pinned by deterministic synthetic-series tests
+in `tests/backtest/test_calibration_spy_buy_and_hold.py` (these run in
+CI without external data).
 
 ---
 

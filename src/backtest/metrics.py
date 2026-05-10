@@ -13,11 +13,22 @@ lookup once macro data lands.
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 import numpy as np
 
 from src.contracts import PerformanceMetrics, PerformanceSnapshot, SignalDirection, Trade
+
+
+@dataclass
+class _OpenLot:
+    """Per-symbol FIFO lot used by ``compute_trade_stats``."""
+
+    opened_at: datetime
+    buy_price: Decimal
+    remaining_qty: Decimal
 
 TRADING_DAYS_PER_YEAR = 252
 DEFAULT_RISK_FREE_RATE = 0.04
@@ -75,7 +86,7 @@ def max_drawdown(navs: list[Decimal]) -> float:
     if len(navs) < 2:
         return 0.0
     arr = np.asarray([float(n) for n in navs], dtype=float)
-    if np.all(arr <= 0):
+    if bool(np.all(arr <= 0)):
         return 0.0
     running_peak = np.maximum.accumulate(arr)
     drawdowns = (running_peak - arr) / running_peak
@@ -106,7 +117,7 @@ def annualised_return(total_return: float, num_days: int) -> float:
     years = num_days / 365.25
     if years <= 0:
         return 0.0
-    return (1.0 + total_return) ** (1.0 / years) - 1.0
+    return float((1.0 + total_return) ** (1.0 / years) - 1.0)
 
 
 def calculate_metrics(
@@ -169,8 +180,8 @@ def compute_trade_stats(trades: list[Trade]) -> tuple[float, float]:
     Returns ``(win_rate, avg_holding_days)``. Empty input or an account
     with only open positions returns ``(0.0, 0.0)``.
     """
-    # Per-symbol queue of (executed_at, price, remaining_qty) BUY lots.
-    open_lots: dict[str, deque[tuple]] = defaultdict(deque)
+    # Per-symbol FIFO queue of open BUY lots.
+    open_lots: dict[str, deque[_OpenLot]] = defaultdict(deque)
     closed_wins = 0
     closed_total = 0
     holding_days_total = 0.0
@@ -179,21 +190,26 @@ def compute_trade_stats(trades: list[Trade]) -> tuple[float, float]:
     for trade in sorted_trades:
         symbol = trade.stock_code
         if trade.direction == SignalDirection.BUY:
-            open_lots[symbol].append([trade.executed_at, trade.price, trade.quantity])
+            open_lots[symbol].append(
+                _OpenLot(
+                    opened_at=trade.executed_at,
+                    buy_price=trade.price,
+                    remaining_qty=trade.quantity,
+                )
+            )
         elif trade.direction == SignalDirection.SELL:
             qty_to_close = trade.quantity
             while qty_to_close > 0 and open_lots[symbol]:
                 lot = open_lots[symbol][0]
-                lot_opened_at, buy_price, lot_qty = lot
-                close_qty = min(lot_qty, qty_to_close)
+                close_qty = min(lot.remaining_qty, qty_to_close)
                 closed_total += 1
-                if trade.price > buy_price:
+                if trade.price > lot.buy_price:
                     closed_wins += 1
-                hold = (trade.executed_at - lot_opened_at).total_seconds() / 86400.0
+                hold = (trade.executed_at - lot.opened_at).total_seconds() / 86400.0
                 holding_days_total += hold
-                lot[2] = lot_qty - close_qty
+                lot.remaining_qty -= close_qty
                 qty_to_close -= close_qty
-                if lot[2] == 0:
+                if lot.remaining_qty == 0:
                     open_lots[symbol].popleft()
         # HOLD trades are not produced by the engine; ignore if present.
 
