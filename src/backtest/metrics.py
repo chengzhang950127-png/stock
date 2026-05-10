@@ -134,6 +134,22 @@ def annualised_return(total_return: float, num_days: int) -> float:
     return float((1.0 + total_return) ** (1.0 / years) - 1.0)
 
 
+def compounded_return_from_daily(daily_returns: list[float]) -> float:
+    """Compound a daily-return series into a cumulative total return.
+
+    Returns ``prod(1 + r) - 1`` over the series. Empty series returns 0.
+
+    This is the dividend-reinvested ("total return") path — it accumulates
+    each day's adj_close-frame change. Compare against
+    ``total_return_from_navs`` which uses raw close.
+    """
+    if not daily_returns:
+        return 0.0
+    arr = np.asarray(daily_returns, dtype=float)
+    growth = float(np.prod(1.0 + arr))
+    return growth - 1.0
+
+
 @dataclass
 class _OpenLot:
     """Per-symbol FIFO lot used by :func:`compute_trade_stats`."""
@@ -226,8 +242,10 @@ def calculate_metrics(
     daily_returns = [s.daily_return for s in snapshots]
 
     tr = total_return_from_navs(navs)
+    tr_with_div = compounded_return_from_daily(daily_returns)
     span_days = (snapshots[-1].date - snapshots[0].date).days
     ar = annualised_return(tr, span_days)
+    ar_with_div = annualised_return(tr_with_div, span_days)
     sharpe = sharpe_ratio(daily_returns, risk_free_rate=risk_free_rate)
     sortino = sortino_ratio(daily_returns, risk_free_rate=risk_free_rate)
     mdd = max_drawdown(navs)
@@ -237,11 +255,9 @@ def calculate_metrics(
 
     return PerformanceMetrics(
         total_return=tr,
-        # Placeholder — compounded TR computation lands in the next commit
-        # (this commit is purely the contract extension + stub).
-        total_return_with_dividends=tr,
+        total_return_with_dividends=tr_with_div,
         annual_return=ar,
-        annual_return_with_dividends=ar,
+        annual_return_with_dividends=ar_with_div,
         sharpe=sharpe,
         sortino=sortino,
         max_drawdown=mdd,

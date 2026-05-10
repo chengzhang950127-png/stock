@@ -11,6 +11,7 @@ from src.backtest.metrics import (
     annualised_return,
     calculate_metrics,
     calmar_ratio,
+    compounded_return_from_daily,
     compute_trade_stats,
     max_drawdown,
     sharpe_ratio,
@@ -218,3 +219,74 @@ def test_calculate_metrics_max_dd_matches_max_drawdown_helper() -> None:
     ]
     metrics = calculate_metrics(snapshots, trades=[])
     assert abs(metrics.max_drawdown - 0.20) < 1e-9
+
+
+# ---- compounded_return_from_daily ----
+
+
+def test_compounded_return_from_daily_empty_returns_zero() -> None:
+    assert compounded_return_from_daily([]) == 0.0
+
+
+def test_compounded_return_from_daily_single_value() -> None:
+    """One day at +5% → cumulative TR = +5%."""
+    assert abs(compounded_return_from_daily([0.05]) - 0.05) < 1e-12
+
+
+def test_compounded_return_from_daily_two_days_compounds() -> None:
+    """+10% then +10% → 1.10 * 1.10 - 1 = 0.21 (not 0.20)."""
+    assert abs(compounded_return_from_daily([0.10, 0.10]) - 0.21) < 1e-9
+
+
+def test_compounded_return_from_daily_negatives_compound_correctly() -> None:
+    """-50% then +100% → 0.5 * 2.0 - 1 = 0.0 (back to flat)."""
+    assert abs(compounded_return_from_daily([-0.5, 1.0]) - 0.0) < 1e-12
+
+
+# ---- TR vs TR-with-dividends divergence (Blocker 2 方案 A regression) ----
+
+
+def test_total_return_vs_total_return_with_dividends_diverge_under_dividends() -> None:
+    """The two TR fields are equal when daily_return matches NAV ratio
+    (no-dividend regime), and divergent when daily_return is dividend-
+    adjusted.
+
+    Sanity test for Blocker 2 方案 A: confirms PerformanceMetrics carries
+    BOTH price return (close-based via NAV ratio) and dividend-adjusted TR
+    (compounded daily_return), and they pull apart when the input series
+    has divergent close vs adj_close behaviour.
+    """
+    # Case 1: daily_return derived directly from nav ratio → no dividend
+    # divergence → the two TR fields agree.
+    no_div_snaps = [
+        _snap(date(2024, 1, 1), Decimal("100"), 0.0),
+        _snap(date(2024, 1, 2), Decimal("110"), 0.10),
+        _snap(date(2024, 1, 3), Decimal("121"), 0.10),  # 10% on 110 = 121
+    ]
+    no_div_metrics = calculate_metrics(no_div_snaps, trades=[])
+    assert abs(no_div_metrics.total_return - 0.21) < 1e-9
+    # compounded(0.0, 0.10, 0.10) = 1.10 * 1.10 - 1 = 0.21
+    assert abs(no_div_metrics.total_return_with_dividends - 0.21) < 1e-9
+    # → equal within rounding tolerance.
+    assert abs(
+        no_div_metrics.total_return - no_div_metrics.total_return_with_dividends
+    ) < 1e-9
+
+    # Case 2: NAV is flat-ish but daily_return reflects dividend reinvestment
+    # (adj_close grew faster). This is the divergence the engine produces
+    # post-Blocker-1 fix.
+    div_snaps = [
+        _snap(date(2024, 1, 1), Decimal("100"), 0.0),
+        _snap(date(2024, 1, 2), Decimal("100"), 0.05),  # NAV flat but adj +5%
+        _snap(date(2024, 1, 3), Decimal("100"), 0.05),  # NAV flat but adj +5%
+    ]
+    div_metrics = calculate_metrics(div_snaps, trades=[])
+    # NAV ratio = 0% (close-based price flat)
+    assert abs(div_metrics.total_return - 0.0) < 1e-9
+    # compounded daily ≈ 1.05 * 1.05 - 1 = 0.1025 (adj_close-based TR)
+    assert abs(div_metrics.total_return_with_dividends - 0.1025) < 1e-9
+    # → divergence ~10.25% (≈ dividend reinvestment PV in this synthetic).
+    assert div_metrics.total_return_with_dividends > div_metrics.total_return
+    assert (
+        div_metrics.total_return_with_dividends - div_metrics.total_return
+    ) > 0.05
