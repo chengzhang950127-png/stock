@@ -70,3 +70,13 @@ tmp/
 
 # --- uv lockfile is committed; uv's tool cache isn't ---
 .uv/
+# Local Claude Code & download artifacts (never commit)
+.claude/
+wp-2.7-fix-r1-prompt.md
+2.7v2/
+files/
+filesartifcts/
+wp0.5v2/
+wp2.7/
+wp2.7 2/
+知识库/
