@@ -13,9 +13,9 @@ import pytest
 from src.contracts import Currency, Market, PriceBar
 from src.data.cache import clear_cache
 from src.data.yfinance_adapter import (
+    _BULK_CHUNK_SIZE,
     DataFetchError,
     YFinanceAdapter,
-    _BULK_CHUNK_SIZE,
     _normalise_history,
     _normalise_history_bulk,
     _normalise_metadata,

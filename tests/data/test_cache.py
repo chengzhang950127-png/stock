@@ -94,9 +94,9 @@ def test_unregistered_model_falls_back_to_dict(cache_dir: Path) -> None:
     This is a deliberate fallback so unrelated callers don't crash if they
     forget to register; they get a clearly-tagged dict they can inspect.
     """
-    from pydantic import BaseModel as _BM
+    from pydantic import BaseModel
 
-    class _UnregisteredWidget(_BM):
+    class _UnregisteredWidget(BaseModel):
         x: int
 
     @cached(ttl_seconds=60, cache_dir=cache_dir, namespace="t.unregistered")

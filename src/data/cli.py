@@ -98,7 +98,7 @@ def fetch(market: str, period_days: int) -> int:
             # of one call per ticker. ~5x fewer HTTP roundtrips for the
             # 105-ticker V0.1 universe and the only knob 429 cares about.
             bars_by_code = await adapter.fetch_price_bars_bulk(tickers, start, end)
-            for code, bars in bars_by_code.items():
+            for bars in bars_by_code.values():
                 if not bars:
                     continue
                 bar_repo.upsert_many(bars)

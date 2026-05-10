@@ -22,7 +22,7 @@ Design notes
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -145,10 +145,8 @@ class YFinanceAdapter:
         if not codes:
             return {}
 
-        result: dict[str, list[PriceBar]] = dict.fromkeys(codes, [])
-        chunks = [
-            codes[i : i + _BULK_CHUNK_SIZE] for i in range(0, len(codes), _BULK_CHUNK_SIZE)
-        ]
+        result: dict[str, list[PriceBar]] = {c: [] for c in codes}
+        chunks = [codes[i : i + _BULK_CHUNK_SIZE] for i in range(0, len(codes), _BULK_CHUNK_SIZE)]
         for chunk in chunks:
             chunk_result = await self._fetch_chunk_cached(tuple(sorted(chunk)), start, end)
             for code in chunk:
@@ -183,7 +181,7 @@ class YFinanceAdapter:
                 tickers=list(sorted_codes),
                 error=str(exc),
             )
-            return dict.fromkeys(sorted_codes, [])
+            return {c: [] for c in sorted_codes}
         return _normalise_history_bulk(list(sorted_codes), df)
 
     @cached(ttl_seconds=_METADATA_TTL, namespace="YFinanceAdapter.fetch_stock_metadata")
@@ -232,7 +230,7 @@ class YFinanceAdapter:
         import yfinance as yf
 
         # yfinance accepts both a single code string and a list — list path
-        # gives the bulk shape (MultiIndex columns: field × ticker).
+        # gives the bulk shape (MultiIndex columns: field x ticker).
         df = yf.download(
             tickers=codes,
             start=start,
@@ -329,7 +327,7 @@ def _normalise_history_bulk(codes: list[str], df: Any) -> dict[str, list[PriceBa
     out) map to ``[]`` — the caller decides how to surface that.
     """
     if df is None or len(df) == 0:
-        return dict.fromkeys(codes, [])
+        return {c: [] for c in codes}
 
     result: dict[str, list[PriceBar]] = {}
     if hasattr(df.columns, "levels") and df.columns.nlevels == 2:
@@ -369,8 +367,9 @@ def _normalise_metadata(code: str, info: dict[str, Any]) -> Stock:
     listed_date: date | None = None
     first_trade = info.get("firstTradeDateEpochUtc")
     if isinstance(first_trade, (int, float)) and first_trade > 0:
+        # Py 3.12 deprecates utcfromtimestamp; use the tz-aware path.
         try:
-            listed_date = datetime.utcfromtimestamp(first_trade).date()
+            listed_date = datetime.fromtimestamp(first_trade, tz=UTC).date()
         except (OSError, OverflowError, ValueError):
             listed_date = None
     return Stock(

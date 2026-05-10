@@ -125,9 +125,7 @@ class PriceBarRepository:
         ]
         update_keys = ("open", "high", "low", "close", "adj_close", "volume")
         self._session.execute(
-            _build_upsert(
-                self._session, PriceBarORM, rows, ("code", "market", "date"), update_keys
-            )
+            _build_upsert(self._session, PriceBarORM, rows, ("code", "market", "date"), update_keys)
         )
         self._session.commit()
 
