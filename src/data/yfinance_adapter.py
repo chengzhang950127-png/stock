@@ -29,10 +29,16 @@ from typing import Any
 import structlog
 
 from src.contracts import Currency, Market, PriceBar, Stock
-from src.data.cache import cached
+from src.data.cache import cached, register_model
 from src.data.universe import get_us_universe
 
 log = structlog.get_logger(__name__)
+
+# The cache stores Pydantic models tagged by class name; register both so
+# cache hits return real ``Stock`` / ``PriceBar`` instances rather than
+# raw dicts. (Without this, downstream code hits AttributeError on day 2.)
+register_model(Stock)
+register_model(PriceBar)
 
 _PRICE_TTL = 24 * 60 * 60
 _METADATA_TTL = 7 * 24 * 60 * 60

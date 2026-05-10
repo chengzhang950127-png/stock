@@ -31,6 +31,30 @@ DEFAULT_CACHE_DIR = Path(".cache/yfinance")
 
 T = TypeVar("T")
 
+# Module-level registry of Pydantic models that the cache should re-hydrate
+# back to their typed form on read. Modules that put models through @cached
+# call register_model(...) at import time so cache hits return the same
+# concrete type as misses.
+_MODEL_REGISTRY: dict[str, type[BaseModel]] = {}
+
+
+def register_model(cls: type[BaseModel]) -> type[BaseModel]:
+    """Register ``cls`` so the cache deserialises it back to a real instance.
+
+    Idempotent: re-registering the same name with the same class is fine
+    (re-imports during pytest will hit this). Re-registering with a
+    *different* class raises — that almost always means two unrelated
+    Pydantic models share a class name and their cache files would collide.
+    """
+    existing = _MODEL_REGISTRY.get(cls.__name__)
+    if existing is not None and existing is not cls:
+        raise ValueError(
+            f"Refusing to register two distinct models under name {cls.__name__!r}: "
+            f"already registered {existing!r}"
+        )
+    _MODEL_REGISTRY[cls.__name__] = cls
+    return cls
+
 
 class _CacheEncoder(json.JSONEncoder):
     """JSON encoder that knows about Decimal/date/datetime/Pydantic."""
@@ -55,6 +79,14 @@ def _decode(obj: Any) -> Any:
             return datetime.fromisoformat(obj["__datetime__"])
         if "__date__" in obj:
             return date.fromisoformat(obj["__date__"])
+        if "__model__" in obj and "data" in obj:
+            cls = _MODEL_REGISTRY.get(obj["__model__"])
+            decoded_data = _decode(obj["data"])
+            if cls is not None:
+                return cls.model_validate(decoded_data)
+            # Fall back to the raw envelope so callers that genuinely want
+            # the dict aren't surprised; logged in debug for visibility.
+            return {"__model__": obj["__model__"], "data": decoded_data}
         return {k: _decode(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_decode(v) for v in obj]
@@ -186,4 +218,4 @@ def clear_cache(cache_dir: Path | None = None) -> int:
     return removed
 
 
-__all__ = ["DEFAULT_CACHE_DIR", "cached", "clear_cache"]
+__all__ = ["DEFAULT_CACHE_DIR", "cached", "clear_cache", "register_model"]

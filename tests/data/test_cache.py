@@ -66,6 +66,11 @@ def test_decimal_and_date_round_trip(cache_dir: Path) -> None:
 
 
 def test_pydantic_model_round_trip(cache_dir: Path) -> None:
+    # Importing the adapter module registers Stock / PriceBar with the cache.
+    # We import here rather than at top-of-file to keep this test honest about
+    # what triggers registration.
+    import src.data.yfinance_adapter  # noqa: F401
+
     @cached(ttl_seconds=60, cache_dir=cache_dir, namespace="t.pydantic")
     def fetch() -> Stock:
         return Stock(
@@ -75,15 +80,34 @@ def test_pydantic_model_round_trip(cache_dir: Path) -> None:
             name="SPDR S&P 500 ETF Trust",
         )
 
-    fetch()  # warm cache (returns the Stock model directly)
-    cached_dict = fetch()  # second call comes through JSON, so it's a dict
-    # The cache stores Pydantic models via ``model_dump`` and re-hydrates
-    # them as plain dicts — callers that need the typed model should
-    # ``Stock.model_validate(cached_dict)`` themselves. The round-trip
-    # test is that the data survives unchanged.
-    assert cached_dict["data"]["code"] == "SPY"  # type: ignore[index]
-    assert cached_dict["data"]["currency"] == "USD"  # type: ignore[index]
-    assert cached_dict["__model__"] == "Stock"  # type: ignore[index]
+    first = fetch()  # warms the cache
+    second = fetch()  # cache hit — must come back as a real Stock
+    assert isinstance(second, Stock), (
+        "cache hit must return the registered Pydantic model, not a dict"
+    )
+    assert second == first
+
+
+def test_unregistered_model_falls_back_to_dict(cache_dir: Path) -> None:
+    """Models not registered round-trip as the {__model__,data} envelope.
+
+    This is a deliberate fallback so unrelated callers don't crash if they
+    forget to register; they get a clearly-tagged dict they can inspect.
+    """
+    from pydantic import BaseModel as _BM
+
+    class _UnregisteredWidget(_BM):
+        x: int
+
+    @cached(ttl_seconds=60, cache_dir=cache_dir, namespace="t.unregistered")
+    def fetch() -> _UnregisteredWidget:
+        return _UnregisteredWidget(x=7)
+
+    fetch()
+    second = fetch()
+    assert isinstance(second, dict)
+    assert second["__model__"] == "_UnregisteredWidget"
+    assert second["data"] == {"x": 7}
 
 
 @pytest.mark.asyncio

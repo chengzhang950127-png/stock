@@ -130,6 +130,8 @@ async def test_fetch_price_bars_raises_after_retries(
 async def test_fetch_price_bars_cached_skips_http(
     monkeypatch: pytest.MonkeyPatch, cache_dir: Path
 ) -> None:
+    from src.contracts import PriceBar
+
     monkeypatch.setattr("src.data.cache.DEFAULT_CACHE_DIR", cache_dir)
     clear_cache(cache_dir=cache_dir)
 
@@ -141,9 +143,15 @@ async def test_fetch_price_bars_cached_skips_http(
         return _fake_history_df()
 
     with patch.object(YFinanceAdapter, "_download_history", staticmethod(counting)):
-        await adapter.fetch_price_bars("SPY", date(2024, 1, 2), date(2024, 1, 4))
-        await adapter.fetch_price_bars("SPY", date(2024, 1, 2), date(2024, 1, 4))
+        bars1 = await adapter.fetch_price_bars("SPY", date(2024, 1, 2), date(2024, 1, 4))
+        bars2 = await adapter.fetch_price_bars("SPY", date(2024, 1, 2), date(2024, 1, 4))
     assert calls["n"] == 1, "cached call must not re-issue the HTTP request"
+    # r2 fix — cache hits must return real PriceBar instances (else
+    # PriceBarRepository.upsert_many crashes with AttributeError on b.code).
+    assert all(isinstance(b, PriceBar) for b in bars2), (
+        "cache hit must rehydrate to PriceBar, not raw dicts"
+    )
+    assert bars1 == bars2
 
 
 def test_invalid_date_range_raises() -> None:
