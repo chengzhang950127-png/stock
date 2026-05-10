@@ -182,8 +182,22 @@ See `docs/INVARIANTS.md` for the full list. Summary:
 
 The hard pass/fail for WP-2.7 is that a lump-sum buy-and-hold backtest of
 SPY for 2020-01-01 to 2024-12-31 must reproduce the yfinance-source
-total return within ±2% (target value set by Architect after Implementer
-runs the CLI on real SPY data):
+total return within ±2%. **Two return metrics are reported**, with the
+±2% gate applied to the dividend-adjusted one:
+
+- `metrics.total_return` — close-based price return (compares to yfinance
+  `Close` ratio for the period, ≈ +80% for SPY 2020-2024).
+- `metrics.total_return_with_dividends` — adj_close-based total return
+  (compares to yfinance `Adj Close` ratio, the standard "5y total return"
+  benchmark, ≈ +96-97% for SPY 2020-2024).
+
+The Architect's ±2% tolerance applies to `total_return_with_dividends`
+vs yfinance Adj Close TR — this is the apples-to-apples comparison.
+The two metrics diverge by ≈ dividend reinvestment PV (per
+`docs/architecture.md §10.5` #5).
+
+Below: target value set by Architect after Implementer runs the CLI on
+real SPY data:
 
 ```bash
 # 1. Fetch SPY bars (CSV with date,open,high,low,close,adj_close,volume).
@@ -204,14 +218,16 @@ uv run python -c "
 import json
 result = json.load(open('/tmp/spy_bh.json'))
 print('=== SPY lump-sum buy-and-hold 2020-01-01 to 2024-12-31 ===')
-print(f'Initial cash:      {result[\"account_initial_cash\"]}')
-print(f'Final NAV:         {result[\"account_final_nav\"]}')
-print(f'Total return:      {result[\"metrics\"][\"total_return\"]:.4%}')
-print(f'Annual return:     {result[\"metrics\"][\"annual_return\"]:.4%}')
-print(f'Sharpe:            {result[\"metrics\"][\"sharpe\"]:.3f}')
-print(f'Max drawdown:      {result[\"metrics\"][\"max_drawdown\"]:.4%}')
-print(f'Number of trades:  {result[\"trade_count\"]}')  # expect 1 (T0 lump-sum)
-print(f'Total fees:        {result[\"total_fees\"]}')
+print(f'Initial cash:                {result[\"account_initial_cash\"]}')
+print(f'Final NAV:                   {result[\"account_final_nav\"]}')
+print(f'Total return (price):        {result[\"metrics\"][\"total_return\"]:.4%}')
+print(f'Total return (with divid.):  {result[\"metrics\"][\"total_return_with_dividends\"]:.4%}')
+print(f'Annual return (price):       {result[\"metrics\"][\"annual_return\"]:.4%}')
+print(f'Annual return (with divid.): {result[\"metrics\"][\"annual_return_with_dividends\"]:.4%}')
+print(f'Sharpe:                      {result[\"metrics\"][\"sharpe\"]:.3f}')
+print(f'Max drawdown:                {result[\"metrics\"][\"max_drawdown\"]:.4%}')
+print(f'Number of trades:            {result[\"trade_count\"]}')  # expect 1 (T0 lump-sum)
+print(f'Total fees:                  {result[\"total_fees\"]}')
 "
 ```
 
